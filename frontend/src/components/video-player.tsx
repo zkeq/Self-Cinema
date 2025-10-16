@@ -40,16 +40,7 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
 
         const video = videoRef.current!;
 
-        // 清理之前的实例
-        if (playerRef.current) {
-          console.log('销毁之前的播放器实例');
-          try {
-            (playerRef.current as { destroy(): void }).destroy();
-          } catch (e) {
-            console.warn('销毁播放器时出错:', e);
-          }
-          playerRef.current = null;
-        }
+        // 清理之前的实例 - 先销毁HLS再销毁Plyr
         if (hlsRef.current) {
           console.log('销毁之前的HLS实例');
           try {
@@ -59,10 +50,25 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
           }
           hlsRef.current = null;
         }
+        
+        if (playerRef.current) {
+          console.log('销毁之前的播放器实例');
+          try {
+            (playerRef.current as { destroy(): void }).destroy();
+          } catch (e) {
+            console.warn('销毁播放器时出错:', e);
+          }
+          playerRef.current = null;
+        }
 
-        // 重置video元素
-        video.src = '';
-        video.load();
+        // 重置video元素 - 使用空白src而不是空字符串
+        try {
+          // 使用空白视频而不是空字符串
+          video.src = 'https://cdn.plyr.io/static/blank.mp4';
+          video.load();
+        } catch (e) {
+          console.warn('重置视频元素时出错:', e);
+        }
 
         // 动态导入 Plyr
         const { default: Plyr } = await import('plyr');
@@ -93,21 +99,37 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
 
               hls.on(Hls.Events.ERROR, (_event: unknown, data: { details: string; fatal: boolean; type: unknown }) => {
                 console.error('HLS error:', data);
-                const errorMsg = `HLS错误: ${data.details}`;
-                setError(errorMsg);
-                setErrorDetails(`错误类型: ${String(data.type)}, 详情: ${data.details}, 致命错误: ${data.fatal}`);
+                
+                // 只有致命错误才显示错误信息
                 if (data.fatal) {
+                  const errorMsg = `HLS错误: ${data.details}`;
+                  setError(errorMsg);
+                  setErrorDetails(`错误类型: ${String(data.type)}, 详情: ${data.details}, 致命错误: ${data.fatal}`);
+                  
+                  // 尝试恢复错误
                   switch (data.type) {
                     case Hls.ErrorTypes.NETWORK_ERROR:
+                      console.log('尝试恢复网络错误...');
                       hls.startLoad();
                       break;
                     case Hls.ErrorTypes.MEDIA_ERROR:
+                      console.log('尝试恢复媒体错误...');
                       hls.recoverMediaError();
                       break;
                     default:
+                      console.log('无法恢复的错误，销毁HLS实例');
+                      // 确保在销毁前分离媒体元素
+                      try {
+                        hls.detachMedia();
+                      } catch (e) {
+                        console.warn('分离媒体元素时出错:', e);
+                      }
                       hls.destroy();
                       break;
                   }
+                } else {
+                  // 非致命错误只记录日志
+                  console.warn('非致命HLS错误:', data.details);
                 }
               });
 
@@ -344,10 +366,21 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
 
     initializePlayer();
 
-    // 清理函数
+    // 清理函数 - 确保按正确顺序销毁实例
     return () => {
       console.log('VideoPlayer 组件清理');
       
+      // 先销毁 HLS 实例
+      if (hlsRef.current) {
+        try {
+          (hlsRef.current as { destroy(): void }).destroy();
+        } catch (e) {
+          console.warn('HLS销毁时出现警告:', e);
+        }
+        hlsRef.current = null;
+      }
+      
+      // 再销毁 Plyr 实例
       if (playerRef.current) {
         try {
           (playerRef.current as { destroy(): void }).destroy();
@@ -356,13 +389,16 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
         }
         playerRef.current = null;
       }
-      if (hlsRef.current) {
+      
+      // 重置视频元素
+      if (videoRef.current) {
         try {
-          (hlsRef.current as { destroy(): void }).destroy();
+          videoRef.current.pause();
+          videoRef.current.src = 'https://cdn.plyr.io/static/blank.mp4';
+          videoRef.current.load();
         } catch (e) {
-          console.warn('HLS销毁时出现警告:', e);
+          console.warn('重置视频元素时出现警告:', e);
         }
-        hlsRef.current = null;
       }
     };
   }, [src, autoplay, episodeId]);
