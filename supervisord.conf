@@ -1,0 +1,32 @@
+[supervisord]
+nodaemon=true
+
+[program:backend]
+command=uvicorn main:app --host 0.0.0.0 --port 8000
+directory=/app/backend
+autostart=true
+autorestart=true
+stdout_logfile=/data/logs/backend.log
+stdout_logfile_maxbytes=1MB
+stderr_logfile=/data/logs/backend.err
+stderr_logfile_maxbytes=1MB
+
+[program:frontend]
+command=node server.js
+directory=/app/frontend
+autostart=true
+autorestart=true
+stdout_logfile=/data/logs/frontend.log
+stdout_logfile_maxbytes=1MB
+stderr_logfile=/data/logs/frontend.err
+stderr_logfile_maxbytes=1MB
+environment=PORT=3000,HOSTNAME=0.0.0.0
+
+[program:nginx]
+command=/usr/sbin/nginx -g "daemon off;"
+autostart=true
+autorestart=true
+stdout_logfile=/data/logs/nginx.log
+stdout_logfile_maxbytes=1MB
+stderr_logfile=/data/logs/nginx.err
+stderr_logfile_maxbytes=1MB

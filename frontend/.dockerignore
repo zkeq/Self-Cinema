@@ -1,0 +1,7 @@
+# Ignore dependencies and build artifacts
+node_modules
+.next
+
+# Ignore local development files
+.DS_Store
+*.local

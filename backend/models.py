@@ -106,21 +106,42 @@ def create_tables():
 
 # 初始化默认管理员账号
 def init_default_admin():
-    from passlib.context import CryptContext
+    from auth import get_password_hash, verify_password
+    from config import ADMIN_USERNAME, ADMIN_PASSWORD
     
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     db = SessionLocal()
     try:
-        # 检查是否已存在管理员账号
+        # 从配置文件获取管理员信息
+        config_username = ADMIN_USERNAME
+        config_password = ADMIN_PASSWORD
+
+        # 检查数据库中是否已存在管理员
         admin = db.query(Admin).first()
-        if not admin:
-            # 创建默认管理员账号 admin/admin123
-            default_admin = Admin(
-                username="admin",
-                password_hash=pwd_context.hash("admin123")
+
+        if admin:
+            # 如果存在，检查用户名和密码是否与配置一致
+            if admin.username != config_username or not verify_password(config_password, admin.password_hash):
+                # 如果不一致，删除旧的管理员
+                db.delete(admin)
+                db.commit()
+                print(f"Removed old admin account: {admin.username}")
+                # 重新创建
+                new_admin = Admin(
+                    username=config_username,
+                    password_hash=get_password_hash(config_password)
+                )
+                db.add(new_admin)
+                db.commit()
+                print(f"Created new admin account from config: {config_username}")
+        else:
+            # 如果不存在，直接创建新管理员
+            new_admin = Admin(
+                username=config_username,
+                password_hash=get_password_hash(config_password)
             )
-            db.add(default_admin)
+            db.add(new_admin)
             db.commit()
-            print("Default admin account created: admin/admin123")
+            print(f"Created initial admin account from config: {config_username}")
+            
     finally:
         db.close()

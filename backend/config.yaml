@@ -1,0 +1,7 @@
+admin:
+  username: "admin"
+  password: "admin123"
+jwt:
+  secret_key: "your-super-secret-key-that-is-long-and-random"
+  algorithm: "HS256"
+  expire_minutes: 60

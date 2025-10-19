@@ -11,7 +11,8 @@ import uuid
 import json
 
 from models import get_db, create_tables, init_default_admin, Admin, Series, Episode, ShareLink
-from auth import authenticate_admin, create_access_token, verify_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from auth import authenticate_admin, create_access_token, verify_token
+from config import JWT_EXPIRE_MINUTES
 
 # 创建FastAPI应用
 app = FastAPI(title="Self Cinema API", version="1.0.0")
@@ -188,7 +189,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=JWT_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": admin.username}, expires_delta=access_token_expires
     )

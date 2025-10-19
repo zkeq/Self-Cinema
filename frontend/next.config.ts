@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   turbopack: {
     rules: {
       '**/*.{js,jsx,ts,tsx}': ['turbo-loader'],

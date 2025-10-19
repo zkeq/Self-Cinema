@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# IDEs and editors
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Node modules
+node_modules
+frontend/node_modules
+backend/venv
+# Add this line for clarity, although it's covered by the top-level venv
+/backend/venv
+backend/__pycache__
+
+# Build artifacts
+frontend/.next
+frontend/out
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Data and uploads
+app-data
+music_data
+backend/uploads/*
+!backend/uploads/.gitkeep
+# Ignore sqlite database files
+# backend/*.db
+backend/*.db-journal
