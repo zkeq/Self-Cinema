@@ -101,6 +101,17 @@ class ApiClient {
       }
       return config;
     });
+
+    this.api.interceptors.response.use(
+        (response) => response,
+        (error: { response: { status: number; }; }) => {
+          if (error.response?.status === 401 && typeof window !== 'undefined') {
+            localStorage.removeItem('token');
+            window.location.href = '/admin/login';
+          }
+          return Promise.reject(error);
+        },
+    );
   }
 
   async login(credentials: LoginRequest): Promise<LoginResponse> {
