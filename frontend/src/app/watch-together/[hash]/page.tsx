@@ -13,7 +13,6 @@ import { VideoPlayer } from "@/components/video-player";
 import { apiClient, EpisodeAPI, SeriesAPI } from "@/lib/api";
 import {
   ArrowLeft,
-  Broadcast,
   Copy,
   Crown,
   Link2,
@@ -446,7 +445,7 @@ export default function WatchTogetherPage() {
                   房主切换集数会自动同步给成员
                 </Badge>
                 <Badge variant="outline" className="gap-1">
-                  <Broadcast className="h-3 w-3 text-primary" />
+                  <Crown className="h-3 w-3 text-primary" />
                   插件窗口默认最小化
                 </Badge>
               </div>
@@ -582,7 +581,7 @@ export default function WatchTogetherPage() {
                       </div>
                       {message.type === "episode-change" ? (
                         <p className="text-xs text-primary flex items-center gap-1">
-                          <Broadcast className="h-4 w-4" />
+                          <Crown className="h-4 w-4" />
                           房主切换到第 {message.episode} 集：{message.title || "新片源"}
                         </p>
                       ) : (
