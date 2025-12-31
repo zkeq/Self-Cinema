@@ -166,6 +166,8 @@ class PlaybackResponse(BaseModel):
     url: str
     updated_at: datetime
     version: int
+    is_same_source: bool = True
+    is_same_episode: bool = True
 
 
 class PlaybackStore:
@@ -543,15 +545,48 @@ async def update_playback(room_hash: str, payload: PlaybackUpdate):
 
 
 @app.get("/together/{room_hash}/playback", response_model=PlaybackResponse)
-async def get_playback(room_hash: str, version: Optional[int] = Query(None)):
+async def get_playback(
+    room_hash: str,
+    version: Optional[str] = Query(None),
+    current_url: Optional[str] = Query(None, alias="currentUrl"),
+    db: Session = Depends(get_db),
+):
     """
     轮询获取当前房间的播放地址。
     如果传入 version，且与服务器一致，则仍会返回当前状态，客户端可自行比对是否变化。
     """
+    if version not in (None, ""):
+        try:
+            int(version)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid 'version', expected integer or empty")
+
     state = playback_store.get(room_hash)
     if not state:
         raise HTTPException(status_code=404, detail="No playback state")
-    return PlaybackResponse(**state.dict())
+
+    is_same_source = True
+    is_same_episode = True
+    if current_url not in (None, ""):
+        is_same_source = current_url == state.url
+        if not is_same_source:
+            host_episode = db.query(Episode).filter(Episode.video_url == state.url).first()
+            viewer_episode = db.query(Episode).filter(Episode.video_url == current_url).first()
+            if host_episode and viewer_episode:
+                is_same_episode = (
+                    host_episode.series_id == viewer_episode.series_id
+                    and host_episode.episode == viewer_episode.episode
+                )
+            else:
+                is_same_episode = False
+
+    return PlaybackResponse(
+        url=state.url,
+        updated_at=state.updated_at,
+        version=state.version,
+        is_same_source=is_same_source,
+        is_same_episode=is_same_episode,
+    )
 
 # 健康检查
 @app.get("/")
