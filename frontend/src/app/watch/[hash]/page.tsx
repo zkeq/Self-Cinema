@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -153,6 +154,12 @@ export default function WatchPage() {
               <Button variant="ghost" size="sm" onClick={() => setIsBookmarked(!isBookmarked)}>
                 <Bookmark className={`h-4 w-4 ${isBookmarked ? 'fill-primary text-primary' : ''}`} />
               </Button>
+              <Link href={`/watch/${hash}/together?action=create&episode=${currentEpisode}`}>
+                <Button variant="secondary" size="sm" className="gap-2">
+                  <Users className="h-4 w-4" />
+                  一起看
+                </Button>
+              </Link>
               <Button variant="ghost" size="sm">
                 <Share2 className="h-4 w-4" />
               </Button>
