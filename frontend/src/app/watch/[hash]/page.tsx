@@ -14,7 +14,7 @@ import { VideoPlayer } from "@/components/video-player";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { getEpisodeStatus, getProgress } from "@/lib/progress";
 import { SeriesAPI, EpisodeAPI, apiClient } from "@/lib/api";
-import { Play, Clock, Calendar, ChevronLeft, ChevronRight, Star, Heart, Share2, Volume2, Settings, Maximize, Users, Eye, Bookmark, Crown, Monitor, CheckCircle, PlayCircle, XCircle, Broadcast } from "lucide-react";
+import { Play, Clock, Calendar, ChevronLeft, ChevronRight, Star, Heart, Share2, Volume2, Settings, Maximize, Users, Eye, Bookmark, Crown, Monitor, CheckCircle, PlayCircle, XCircle } from "lucide-react";
 
 export default function WatchPage() {
   const params = useParams();
@@ -154,7 +154,7 @@ export default function WatchPage() {
                 className="gap-2"
                 onClick={() => router.push(`/watch-together/${hash}?room=${defaultRoomName}&password=${defaultPassword}&episode=${currentEpisode}&action=create`)}
               >
-                <Broadcast className="h-4 w-4" />
+                <ChevronLeft className="h-4 w-4" />
                 一起看
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setIsLiked(!isLiked)}>
