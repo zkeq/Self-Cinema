@@ -1,0 +1,645 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { VideoPlayer } from "@/components/video-player";
+import { apiClient, EpisodeAPI, SeriesAPI } from "@/lib/api";
+import {
+  ArrowLeft,
+  Copy,
+  Link2,
+  Loader2,
+  MessageCircle,
+  MonitorPlay,
+  Send,
+  Share2,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
+
+type ChatMessage = {
+  id: string;
+  sender: string;
+  content: string;
+  timestamp: string;
+  type?: "chat" | "system";
+};
+
+declare global {
+  interface Window {
+    videoTogetherExtension?: {
+      CreateRoom: (name: string, password?: string) => void;
+      JoinRoom: (name: string, password?: string) => void;
+      roomName?: string;
+    };
+  }
+}
+
+export default function TogetherPage() {
+  const params = useParams();
+  const searchParams = useSearchParams();
+  const hash = params.hash as string;
+
+  const initialEpisode = parseInt(searchParams.get("episode") || "1", 10);
+  const initialRoom = searchParams.get("room") || `movie-${hash}`;
+  const initialPassword = searchParams.get("password") || `pass-${hash}`;
+  const initialAction =
+    (searchParams.get("action") as "create" | "join" | null) || "create";
+
+  const [series, setSeries] = useState<SeriesAPI | null>(null);
+  const [episodes, setEpisodes] = useState<EpisodeAPI[]>([]);
+  const [currentEpisode, setCurrentEpisode] = useState(initialEpisode);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [roomName, setRoomName] = useState(initialRoom);
+  const [roomPassword, setRoomPassword] = useState(initialPassword);
+  const [roomAction, setRoomAction] = useState<"create" | "join">(
+    initialAction === "join" ? "join" : "create",
+  );
+  const [vtScriptLoaded, setVtScriptLoaded] = useState(false);
+  const [vtReady, setVtReady] = useState(false);
+  const [vtStatus, setVtStatus] = useState<string>("插件未加载");
+  const [isHost, setIsHost] = useState(initialAction !== "join");
+  const roomInitializedRef = useRef(false);
+
+  const [displayName, setDisplayName] = useState(
+    `影迷${Math.floor(Math.random() * 900 + 100)}`,
+  );
+  const [messageInput, setMessageInput] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatStatus, setChatStatus] = useState<
+    "connecting" | "connected" | "disconnected" | "error"
+  >("connecting");
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatSocketRef = useRef<WebSocket | null>(null);
+
+  const apiBaseUrl =
+    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const wsUrl = useMemo(() => {
+    try {
+      const base = new URL(apiBaseUrl);
+      base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+      base.pathname = `/ws/together/${hash}`;
+      return base.toString();
+    } catch {
+      return `ws://localhost:8000/ws/together/${hash}`;
+    }
+  }, [apiBaseUrl, hash]);
+
+  const shareLink = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("action", "join");
+    url.searchParams.set("room", roomName);
+    url.searchParams.set("password", roomPassword);
+    url.searchParams.set("episode", currentEpisode.toString());
+    return url.toString();
+  }, [currentEpisode, roomName, roomPassword]);
+
+  const currentEpisodeData = episodes.find(
+    (item) => item.episode === currentEpisode,
+  );
+
+  const generateId = useCallback(
+    () =>
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}`,
+    [],
+  );
+
+  const addSystemMessage = useCallback(
+    (text: string) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: generateId(),
+          sender: "系统",
+          content: text,
+          timestamp: new Date().toISOString(),
+          type: "system",
+        },
+      ]);
+    },
+    [generateId],
+  );
+
+  const applyMinimizeDefault = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.postMessage(
+      {
+        type: 15,
+        source: "VideoTogether",
+        data: { key: "MinimiseDefault", value: true },
+      },
+      "*",
+    );
+  }, []);
+
+  const handleCreateRoom = useCallback(() => {
+    if (!window.videoTogetherExtension) {
+      setVtStatus("插件还未初始化完成");
+      return;
+    }
+    window.videoTogetherExtension.CreateRoom(roomName, roomPassword);
+    setIsHost(true);
+    setVtStatus("已创建房间并成为房主");
+    roomInitializedRef.current = true;
+    applyMinimizeDefault();
+  }, [applyMinimizeDefault, roomName, roomPassword]);
+
+  const handleJoinRoom = useCallback(() => {
+    if (!window.videoTogetherExtension) {
+      setVtStatus("插件还未初始化完成");
+      return;
+    }
+    window.videoTogetherExtension.JoinRoom(roomName, roomPassword);
+    setIsHost(false);
+    setVtStatus("已加入房间");
+    roomInitializedRef.current = true;
+    applyMinimizeDefault();
+  }, [applyMinimizeDefault, roomName, roomPassword]);
+
+  const handleEpisodeChange = (episodeNumber: number) => {
+    setCurrentEpisode(episodeNumber);
+    if (typeof window !== "undefined") {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("episode", episodeNumber.toString());
+      window.history.replaceState({}, "", nextUrl.toString());
+    }
+  };
+
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      addSystemMessage("分享链接已复制");
+    } catch {
+      addSystemMessage("复制失败，请手动复制链接");
+    }
+  };
+
+  const connectChat = useCallback(() => {
+    try {
+      const socket = new WebSocket(wsUrl);
+      chatSocketRef.current = socket;
+      setChatStatus("connecting");
+
+      socket.onopen = () => {
+        setChatStatus("connected");
+        const welcome = {
+          id: generateId(),
+          sender: displayName,
+          content: `${displayName} 加入了聊天`,
+          timestamp: new Date().toISOString(),
+          type: "system",
+        };
+        socket.send(JSON.stringify(welcome));
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as ChatMessage;
+          setMessages((prev) => [...prev, payload]);
+        } catch {
+          setChatStatus("error");
+        }
+      };
+
+      socket.onerror = () => setChatStatus("error");
+      socket.onclose = () => setChatStatus("disconnected");
+    } catch {
+      setChatStatus("error");
+    }
+  }, [displayName, generateId, wsUrl]);
+
+  const sendMessage = () => {
+    if (!messageInput.trim()) return;
+    const socket = chatSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setChatStatus("error");
+      return;
+    }
+
+    const payload: ChatMessage = {
+      id: generateId(),
+      sender: displayName,
+      content: messageInput.trim(),
+      timestamp: new Date().toISOString(),
+      type: "chat",
+    };
+
+    socket.send(JSON.stringify(payload));
+    setMessageInput("");
+  };
+
+  // 加载播放数据
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        const data = await apiClient.getWatchData(hash);
+        setSeries(data.series);
+        setEpisodes(data.episodes);
+      } catch (err) {
+        console.error("Failed to load watch data:", err);
+        setError("加载失败，请检查分享链接是否有效");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    if (hash) {
+      loadData();
+    }
+  }, [hash]);
+
+  // 聊天室连接
+  useEffect(() => {
+    connectChat();
+    return () => {
+      chatSocketRef.current?.close();
+    };
+  }, [connectChat]);
+
+  // 自动滚动到底部
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  // 本地存储昵称
+  useEffect(() => {
+    const storedName = localStorage.getItem("together-display-name");
+    if (storedName) {
+      setDisplayName(storedName);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("together-display-name", displayName);
+  }, [displayName]);
+
+  // 注入 VideoTogether 脚本
+  useEffect(() => {
+    const existing = document.getElementById("video-together-loader");
+    if (existing) {
+      setVtScriptLoaded(true);
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "video-together-loader";
+    script.src = "/extension.website.user.js";
+    script.async = true;
+    script.onload = () => setVtScriptLoaded(true);
+    script.onerror = () => setVtStatus("一起看脚本加载失败，请刷新重试");
+    document.body.appendChild(script);
+  }, []);
+
+  // 轮询等待插件就绪
+  useEffect(() => {
+    if (!vtScriptLoaded) return;
+    const timer = setInterval(() => {
+      if (window.videoTogetherExtension) {
+        setVtReady(true);
+        setVtStatus("VideoTogether 插件已就绪");
+        applyMinimizeDefault();
+        clearInterval(timer);
+      }
+    }, 400);
+    return () => clearInterval(timer);
+  }, [applyMinimizeDefault, vtScriptLoaded]);
+
+  // 脚本就绪后自动创建/加入房间
+  useEffect(() => {
+    if (!vtReady || roomInitializedRef.current) return;
+    if (roomAction === "join") {
+      handleJoinRoom();
+    } else {
+      handleCreateRoom();
+    }
+  }, [handleCreateRoom, handleJoinRoom, roomAction, vtReady]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>加载中...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !series) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <p className="text-lg font-semibold">加载失败</p>
+          <p className="text-muted-foreground">{error}</p>
+          <Button onClick={() => window.location.reload()}>刷新页面</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="sticky top-0 z-50 bg-background/80 backdrop-blur border-b border-border/50">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href={`/watch/${hash}`}>
+              <Button variant="ghost" size="sm" className="gap-2">
+                <ArrowLeft className="h-4 w-4" />
+                返回详情
+              </Button>
+            </Link>
+            <div>
+              <h1 className="font-semibold text-sm leading-tight">{series.title}</h1>
+              <p className="text-xs text-muted-foreground">
+                一起看房间 · {roomName}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant={vtReady ? "secondary" : "outline"}>
+              {vtStatus}
+            </Badge>
+            <ThemeToggle />
+          </div>
+        </div>
+      </div>
+
+      <div className="container mx-auto px-4 py-6">
+        <div className="grid lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-4">
+            <Card className="overflow-hidden">
+              <CardHeader className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <MonitorPlay className="h-5 w-5 text-primary" />
+                    正在播放 · 第 {currentEpisode} 集
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => {
+                        setRoomAction("create");
+                        handleCreateRoom();
+                      }}
+                      disabled={!vtReady}
+                    >
+                      <ShieldCheck className="h-4 w-4" />
+                      房主创建
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => {
+                        setRoomAction("join");
+                        handleJoinRoom();
+                      }}
+                      disabled={!vtReady}
+                    >
+                      <Users className="h-4 w-4" />
+                      访客加入
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="gap-2"
+                      onClick={
+                        roomAction === "join" ? handleJoinRoom : handleCreateRoom
+                      }
+                      disabled={!vtReady}
+                    >
+                      <Share2 className="h-4 w-4" />
+                      {roomAction === "join" ? "重新加入" : "重新创建"}
+                    </Button>
+                  </div>
+                </div>
+                <CardDescription className="flex items-center gap-2">
+                  <Badge variant="outline" className="uppercase">
+                    {isHost ? "房主" : "观众"}
+                  </Badge>
+                  <span className="text-muted-foreground">
+                    窗口默认最小化已开启，打开右下角图标即可展开控制
+                  </span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="aspect-video bg-black rounded-lg overflow-hidden">
+                  <VideoPlayer
+                    key={`episode-${currentEpisode}`}
+                    src={
+                      currentEpisodeData?.videoUrl ||
+                      "https://media.onmicrosoft.cn/Re-He-Road-LIZHI-2018-Unplugged.mp4"
+                    }
+                    autoplay={false}
+                    episodeId={currentEpisodeData?.id}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Users className="h-5 w-5 text-primary" />
+                  房间信息
+                </CardTitle>
+                <CardDescription>
+                  生成分享链接后，好友可直接进入该页面同步播放
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">房间名</p>
+                    <Input
+                      value={roomName}
+                      onChange={(e) => setRoomName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">房间密码</p>
+                    <Input
+                      value={roomPassword}
+                      onChange={(e) => setRoomPassword(e.target.value)}
+                      type="password"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">分享链接</p>
+                  <div className="flex gap-2 items-center">
+                    <Input value={shareLink} readOnly className="font-mono" />
+                    <Button variant="outline" size="icon" onClick={copyShareLink}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    <Link href={shareLink}>
+                      <Button variant="secondary" size="icon">
+                        <Link2 className="h-4 w-4" />
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2">
+                  <MonitorPlay className="h-5 w-5 text-primary" />
+                  选集播放（房主切换会同步给成员）
+                </CardTitle>
+                <CardDescription>
+                  当前 {currentEpisode} / {series.totalEpisodes}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[360px] pr-4">
+                  <div className="grid md:grid-cols-2 gap-3">
+                    {episodes.map((episode) => (
+                      <button
+                        key={episode.id}
+                        onClick={() => handleEpisodeChange(episode.episode)}
+                        className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-all ${
+                          currentEpisode === episode.episode
+                            ? "border-primary bg-primary/5 shadow-lg"
+                            : "border-border hover:border-primary/40 hover:bg-muted/50"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary" className="min-w-16">
+                              第 {episode.episode} 集
+                            </Badge>
+                            {episode.isVip && <ShieldCheck className="h-4 w-4 text-yellow-500" />}
+                          </div>
+                          <span className="text-xs text-muted-foreground">
+                            {episode.duration}
+                          </span>
+                        </div>
+                        <p className="font-medium leading-tight line-clamp-1">
+                          {episode.title.replace(`第${episode.episode}集：`, "")}
+                        </p>
+                        <p className="text-xs text-muted-foreground line-clamp-2">
+                          {episode.description}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2">
+                  <MessageCircle className="h-5 w-5 text-primary" />
+                  同步聊天室
+                </CardTitle>
+                <CardDescription className="flex items-center gap-2">
+                  <Badge variant={chatStatus === "connected" ? "secondary" : "outline"}>
+                    {chatStatus === "connected" ? "已连接" : "连接中/已断开"}
+                  </Badge>
+                  <span className="text-muted-foreground text-sm">
+                    房间内成员可以实时交流
+                  </span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">我的昵称</p>
+                  <Input
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                  />
+                </div>
+                <Separator />
+                <div
+                  className="h-[420px] rounded-lg border bg-muted/40 p-3 overflow-y-auto"
+                  ref={chatScrollRef}
+                >
+                  <div className="space-y-3">
+                    {messages.map((message) => (
+                      <div key={message.id} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{message.sender}</Badge>
+                            {message.type === "system" && (
+                              <Badge variant="secondary">系统</Badge>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-muted-foreground">
+                            {new Date(message.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <p className="text-sm whitespace-pre-wrap">
+                          {message.content}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="输入聊天内容，回车发送"
+                    value={messageInput}
+                    onChange={(e) => setMessageInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                      }
+                    }}
+                  />
+                  <Button onClick={sendMessage} className="gap-2">
+                    <Send className="h-4 w-4" />
+                    发送
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Share2 className="h-4 w-4 text-primary" />
+                  使用说明
+                </CardTitle>
+                <CardDescription className="space-y-2 text-sm">
+                  <p>1. 页面加载完成后会自动注入 VideoTogether 脚本。</p>
+                  <p>2. 默认创建房间并开启“窗口默认最小化”选项。</p>
+                  <p>3. 将上方分享链接发给好友，访客会自动加入房间。</p>
+                  <p>4. 房主切换剧集时，成员的视频地址会一起更新。</p>
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel
 from urllib.parse import urlparse
 import hashlib
@@ -110,6 +110,38 @@ class ShareResponse(BaseModel):
 class WatchResponse(BaseModel):
     series: SeriesResponse
     episodes: List[EpisodeResponse]
+
+class RoomConnectionManager:
+    """管理同一房间的 websocket 连接"""
+    def __init__(self):
+        self.rooms: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, room: str, websocket: WebSocket):
+        await websocket.accept()
+        self.rooms.setdefault(room, []).append(websocket)
+
+    def disconnect(self, room: str, websocket: WebSocket):
+        if room not in self.rooms:
+            return
+        if websocket in self.rooms[room]:
+            self.rooms[room].remove(websocket)
+        if not self.rooms[room]:
+            del self.rooms[room]
+
+    async def broadcast(self, room: str, message: dict):
+        if room not in self.rooms:
+            return
+        inactive_clients = []
+        for ws in list(self.rooms[room]):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                inactive_clients.append(ws)
+        for ws in inactive_clients:
+            self.disconnect(room, ws)
+
+# 全局聊天室管理器
+chat_manager = RoomConnectionManager()
 
 # 依赖函数
 def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
@@ -429,6 +461,53 @@ async def get_watch_data(hash: str, db: Session = Depends(get_db)):
         series=series_to_response(series),
         episodes=[episode_to_response(episode) for episode in episodes]
     )
+
+@app.websocket("/ws/together/{room_hash}")
+async def together_chat(websocket: WebSocket, room_hash: str):
+    """基于分享链接的轻量聊天室"""
+    await chat_manager.connect(room_hash, websocket)
+    join_message = {
+        "id": str(uuid.uuid4()),
+        "sender": "系统",
+        "content": "有新成员加入了房间",
+        "timestamp": datetime.utcnow().isoformat(),
+        "type": "system",
+    }
+    await chat_manager.broadcast(room_hash, join_message)
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            message = {
+                "id": data.get("id", str(uuid.uuid4())),
+                "sender": data.get("sender", "匿名用户"),
+                "content": data.get("content", ""),
+                "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
+                "type": data.get("type", "chat"),
+            }
+            if not message["content"]:
+                continue
+            await chat_manager.broadcast(room_hash, message)
+    except WebSocketDisconnect:
+        chat_manager.disconnect(room_hash, websocket)
+        leave_message = {
+            "id": str(uuid.uuid4()),
+            "sender": "系统",
+            "content": "有成员离开了房间",
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "system",
+        }
+        await chat_manager.broadcast(room_hash, leave_message)
+    except Exception:
+        chat_manager.disconnect(room_hash, websocket)
+        error_message = {
+            "id": str(uuid.uuid4()),
+            "sender": "系统",
+            "content": "聊天室连接异常，已断开",
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "system",
+        }
+        await chat_manager.broadcast(room_hash, error_message)
 
 # 健康检查
 @app.get("/")
