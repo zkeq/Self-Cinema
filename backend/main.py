@@ -1,14 +1,13 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Deque, Dict, List, Optional
 from pydantic import BaseModel
 from urllib.parse import urlparse
 import hashlib
 import uuid
-import json
 
 from models import get_db, create_tables, init_default_admin, Admin, Series, Episode, ShareLink
 from auth import authenticate_admin, create_access_token, verify_token
@@ -110,6 +109,48 @@ class ShareResponse(BaseModel):
 class WatchResponse(BaseModel):
     series: SeriesResponse
     episodes: List[EpisodeResponse]
+
+class ChatMessage(BaseModel):
+    id: str
+    sender: str
+    content: str
+    timestamp: datetime
+    type: Optional[str] = "chat"
+
+
+class ChatMessageCreate(BaseModel):
+    sender: Optional[str] = "匿名用户"
+    content: str
+    timestamp: Optional[datetime] = None
+    type: Optional[str] = "chat"
+    id: Optional[str] = None
+
+
+class ChatRoomStore:
+    """基于内存的轻量聊天室存储，便于轮询获取消息"""
+    def __init__(self, max_messages: int = 200):
+        self.rooms: Dict[str, Deque[ChatMessage]] = {}
+        self.max_messages = max_messages
+
+    def add_message(self, room: str, message: ChatMessage) -> ChatMessage:
+        from collections import deque
+
+        if room not in self.rooms:
+            self.rooms[room] = deque(maxlen=self.max_messages)
+        self.rooms[room].append(message)
+        return message
+
+    def get_messages(self, room: str, since: Optional[datetime] = None) -> List[ChatMessage]:
+        if room not in self.rooms:
+            return []
+        messages = list(self.rooms[room])
+        if since is None:
+            return messages
+        return [msg for msg in messages if msg.timestamp > since]
+
+
+# 全局聊天室存储
+chat_store = ChatRoomStore()
 
 # 依赖函数
 def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
@@ -429,6 +470,33 @@ async def get_watch_data(hash: str, db: Session = Depends(get_db)):
         series=series_to_response(series),
         episodes=[episode_to_response(episode) for episode in episodes]
     )
+
+@app.post("/together/{room_hash}/messages", response_model=ChatMessage)
+async def post_chat_message(room_hash: str, payload: ChatMessageCreate):
+    """通过HTTP提交聊天室消息，便于轮询"""
+    if not payload.content:
+        raise HTTPException(status_code=400, detail="Message content is required")
+
+    message = ChatMessage(
+        id=payload.id or str(uuid.uuid4()),
+        sender=payload.sender or "匿名用户",
+        content=payload.content,
+        timestamp=payload.timestamp or datetime.utcnow(),
+        type=payload.type or "chat",
+    )
+    return chat_store.add_message(room_hash, message)
+
+
+@app.get("/together/{room_hash}/messages", response_model=List[ChatMessage])
+async def get_chat_messages(room_hash: str, since: Optional[str] = Query(None)):
+    """轮询获取聊天室消息，可通过 since 过滤"""
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid 'since' format, expected ISO8601")
+    return chat_store.get_messages(room_hash, since_dt)
 
 # 健康检查
 @app.get("/")
