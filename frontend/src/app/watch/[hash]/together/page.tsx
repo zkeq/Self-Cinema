@@ -353,14 +353,24 @@ export default function TogetherPage() {
   // 轮询后台播放地址，跟随房主的切换
   const fetchPlayback = useCallback(async () => {
     try {
+      const currentPlaybackUrl =
+        overrideSrc || currentEpisodeData?.videoUrl || "";
       const res = await fetch(
-        `${apiBaseUrl}/together/${hash}/playback?version=${playbackVersion || ""}`,
+        `${apiBaseUrl}/together/${hash}/playback?version=${playbackVersion || ""}&currentUrl=${encodeURIComponent(currentPlaybackUrl)}`,
       );
       if (!res.ok) return;
-      const data: { url: string; version: number } = await res.json();
+      const data: {
+        url: string;
+        version: number;
+        is_same_source?: boolean;
+        is_same_episode?: boolean;
+      } = await res.json();
       if (!data?.url) return;
       if (data.version === playbackVersion) return;
       setPlaybackVersion(data.version);
+      if (data.is_same_source === false || data.is_same_episode === false) {
+        addSystemMessage("已为你同步到房主的播放进度");
+      }
 
       // 如果存在匹配的剧集，则同步选集中状态，否则仅覆盖播放源
       const matchedEpisode = episodes.find((ep) => ep.videoUrl === data.url);
@@ -373,7 +383,16 @@ export default function TogetherPage() {
     } catch (err) {
       console.error("轮询播放地址失败", err);
     }
-  }, [apiBaseUrl, episodes, handleEpisodeChange, hash, playbackVersion]);
+  }, [
+    addSystemMessage,
+    apiBaseUrl,
+    currentEpisodeData?.videoUrl,
+    episodes,
+    handleEpisodeChange,
+    hash,
+    overrideSrc,
+    playbackVersion,
+  ]);
 
   useEffect(() => {
     if (isHost) return; // 房主自己触发更新
