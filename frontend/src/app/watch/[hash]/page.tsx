@@ -14,7 +14,7 @@ import { VideoPlayer } from "@/components/video-player";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { getEpisodeStatus, getProgress } from "@/lib/progress";
 import { SeriesAPI, EpisodeAPI, apiClient } from "@/lib/api";
-import { Play, Clock, Calendar, ChevronLeft, ChevronRight, Star, Heart, Share2, Volume2, Settings, Maximize, Users, Eye, Bookmark, Crown, Monitor, CheckCircle, PlayCircle, XCircle } from "lucide-react";
+import { Play, Clock, Calendar, ChevronLeft, ChevronRight, Star, Heart, Share2, Volume2, Settings, Maximize, Users, Eye, Bookmark, Crown, Monitor, CheckCircle, PlayCircle, XCircle, Broadcast } from "lucide-react";
 
 export default function WatchPage() {
   const params = useParams();
@@ -124,6 +124,8 @@ export default function WatchPage() {
   }
 
   const currentEpisodeData = episodes.find(ep => ep.episode === currentEpisode);
+  const defaultRoomName = `selfcinema-${hash}`;
+  const defaultPassword = `pw-${hash.slice(0, 6)}`;
 
   return (
     <div className="min-h-screen bg-background">      
@@ -147,6 +149,14 @@ export default function WatchPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button 
+                size="sm" 
+                className="gap-2"
+                onClick={() => router.push(`/watch-together/${hash}?room=${defaultRoomName}&password=${defaultPassword}&episode=${currentEpisode}&action=create`)}
+              >
+                <Broadcast className="h-4 w-4" />
+                一起看
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => setIsLiked(!isLiked)}>
                 <Heart className={`h-4 w-4 ${isLiked ? 'fill-red-500 text-red-500' : ''}`} />
               </Button>

@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from collections import defaultdict, deque
+from fastapi import FastAPI, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from urllib.parse import urlparse
 import hashlib
@@ -110,6 +111,44 @@ class ShareResponse(BaseModel):
 class WatchResponse(BaseModel):
     series: SeriesResponse
     episodes: List[EpisodeResponse]
+
+# watch-together websocket 管理器
+class ConnectionManager:
+    """In-memory room manager for watch-together chat and control events."""
+
+    def __init__(self):
+        self.active_connections: Dict[str, set[WebSocket]] = defaultdict(set)
+        self.message_history: Dict[str, deque[Dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
+
+    async def connect(self, room: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[room].add(websocket)
+        history = list(self.message_history[room])
+        if history:
+            await websocket.send_json({"type": "history", "messages": history})
+
+    def disconnect(self, room: str, websocket: WebSocket):
+        if websocket in self.active_connections[room]:
+            self.active_connections[room].remove(websocket)
+        if len(self.active_connections[room]) == 0:
+            self.active_connections.pop(room, None)
+            self.message_history.pop(room, None)
+
+    async def broadcast(self, room: str, message: Dict[str, Any]):
+        stale_connections = []
+        for connection in list(self.active_connections.get(room, [])):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                stale_connections.append(connection)
+        for connection in stale_connections:
+            self.disconnect(room, connection)
+
+    def remember_message(self, room: str, message: Dict[str, Any]):
+        self.message_history[room].append(message)
+
+
+connection_manager = ConnectionManager()
 
 # 依赖函数
 def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
@@ -429,6 +468,44 @@ async def get_watch_data(hash: str, db: Session = Depends(get_db)):
         series=series_to_response(series),
         episodes=[episode_to_response(episode) for episode in episodes]
     )
+
+@app.websocket("/ws/watch-together/{room}")
+async def watch_together_socket(websocket: WebSocket, room: str):
+    """Simple chat + playback sync channel for watch-together rooms."""
+    await connection_manager.connect(room, websocket)
+    try:
+        while True:
+            raw_message = await websocket.receive_text()
+            try:
+                payload = json.loads(raw_message)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid message payload"})
+                continue
+
+            message = {
+                "type": payload.get("type", "chat"),
+                "user": payload.get("user", "匿名用户"),
+                "content": payload.get("content", ""),
+                "timestamp": datetime.utcnow().isoformat(),
+                "episode": payload.get("episode"),
+                "videoUrl": payload.get("videoUrl"),
+                "title": payload.get("title"),
+            }
+
+            if message["type"] in {"chat", "episode-change", "system"}:
+                connection_manager.remember_message(room, message)
+
+            await connection_manager.broadcast(room, message)
+    except WebSocketDisconnect:
+        connection_manager.disconnect(room, websocket)
+        await connection_manager.broadcast(
+            room,
+            {
+                "type": "system",
+                "content": "有用户离开了房间",
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
 
 # 健康检查
 @app.get("/")
