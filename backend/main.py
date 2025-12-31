@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel
 from urllib.parse import urlparse
 import hashlib
@@ -110,6 +110,17 @@ class ShareResponse(BaseModel):
 class WatchResponse(BaseModel):
     series: SeriesResponse
     episodes: List[EpisodeResponse]
+
+class ChatMessage(BaseModel):
+    id: str
+    sender: str
+    content: str
+    timestamp: datetime
+    type: str = "chat"
+
+# 简单的内存聊天室存储（轮询）
+chat_history: Dict[str, List[ChatMessage]] = {}
+CHAT_HISTORY_LIMIT = 200
 
 # 依赖函数
 def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
@@ -429,6 +440,58 @@ async def get_watch_data(hash: str, db: Session = Depends(get_db)):
         series=series_to_response(series),
         episodes=[episode_to_response(episode) for episode in episodes]
     )
+
+def _add_chat_message(room_hash: str, message: ChatMessage):
+    room_messages = chat_history.setdefault(room_hash, [])
+    room_messages.append(message)
+    # 保留最近的消息，避免内存过大
+    if len(room_messages) > CHAT_HISTORY_LIMIT:
+        chat_history[room_hash] = room_messages[-CHAT_HISTORY_LIMIT:]
+
+def _filter_messages(room_hash: str, since: Optional[str]) -> List[ChatMessage]:
+    messages = chat_history.get(room_hash, [])
+    if not since:
+        return messages
+    try:
+        since_time = datetime.fromisoformat(since)
+    except ValueError:
+        return messages
+    return [msg for msg in messages if msg.timestamp >= since_time]
+
+@app.get("/together/{room_hash}/messages", response_model=List[ChatMessage])
+async def get_chat_messages(room_hash: str, since: Optional[str] = None):
+    """轮询获取聊天室消息"""
+    return _filter_messages(room_hash, since)
+
+class ChatMessageCreate(BaseModel):
+    sender: str
+    content: str
+    type: str = "chat"
+    timestamp: Optional[str] = None
+    id: Optional[str] = None
+
+@app.post("/together/{room_hash}/messages", response_model=List[ChatMessage])
+async def post_chat_message(room_hash: str, payload: ChatMessageCreate):
+    """新增聊天室消息（用于轮询模式）"""
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content cannot be empty")
+
+    try:
+        msg_timestamp = datetime.fromisoformat(payload.timestamp) if payload.timestamp else datetime.utcnow()
+    except ValueError:
+        msg_timestamp = datetime.utcnow()
+
+    message = ChatMessage(
+        id=payload.id or str(uuid.uuid4()),
+        sender=payload.sender or "匿名用户",
+        content=content,
+        timestamp=msg_timestamp,
+        type=payload.type or "chat",
+    )
+    _add_chat_message(room_hash, message)
+    # 返回最新消息列表，便于客户端同步
+    return _filter_messages(room_hash, None)
 
 # 健康检查
 @app.get("/")
