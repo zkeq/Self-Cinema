@@ -543,11 +543,17 @@ async def update_playback(room_hash: str, payload: PlaybackUpdate):
 
 
 @app.get("/together/{room_hash}/playback", response_model=PlaybackResponse)
-async def get_playback(room_hash: str, version: Optional[int] = Query(None)):
+async def get_playback(room_hash: str, version: Optional[str] = Query(None)):
     """
     轮询获取当前房间的播放地址。
     如果传入 version，且与服务器一致，则仍会返回当前状态，客户端可自行比对是否变化。
     """
+    if version not in (None, ""):
+        try:
+            int(version)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid 'version', expected integer or empty")
+
     state = playback_store.get(room_hash)
     if not state:
         raise HTTPException(status_code=404, detail="No playback state")
