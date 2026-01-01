@@ -629,23 +629,25 @@ export default function TogetherPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="sticky top-0 z-50 bg-background/80 backdrop-blur border-b border-border/50">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="container mx-auto px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3 min-w-0">
             <Link href={`/watch/${hash}`}>
               <Button variant="ghost" size="sm" className="gap-2">
                 <ArrowLeft className="h-4 w-4" />
                 返回详情
               </Button>
             </Link>
-            <div>
-              <h1 className="font-semibold text-sm leading-tight">{series.title}</h1>
+            <div className="min-w-0">
+              <h1 className="font-semibold text-sm leading-tight line-clamp-2">
+                {series.title}
+              </h1>
               <p className="text-xs text-muted-foreground">
                 一起看房间 · {roomName}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant={vtReady ? "secondary" : "outline"}>
+          <div className="flex items-center gap-2 sm:justify-end">
+            <Badge variant={vtReady ? "secondary" : "outline"} className="max-sm:flex-1 max-sm:justify-center">
               {vtStatus}
             </Badge>
             <ThemeToggle />
