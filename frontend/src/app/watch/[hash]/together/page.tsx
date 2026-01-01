@@ -530,18 +530,6 @@ export default function TogetherPage() {
     }
   }, [messages]);
 
-  // 本地存储昵称
-  useEffect(() => {
-    const storedName = localStorage.getItem("together-display-name");
-    if (storedName) {
-      setDisplayName(storedName);
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem("together-display-name", displayName);
-  }, [displayName]);
-
   useEffect(() => {
     applyMinimizeDefault();
   }, [applyMinimizeDefault]);
