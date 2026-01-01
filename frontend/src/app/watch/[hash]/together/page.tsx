@@ -921,19 +921,9 @@ export default function TogetherPage() {
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
                       value={roomName}
-                      onChange={(e) => setRoomName(e.target.value)}
+                      disabled
                     />
-                    <Button
-                      variant="outline"
-                      className="whitespace-nowrap"
-                      onClick={handleCreateNewRoom}
-                    >
-                      新建房间
-                    </Button>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    生成新房间会更新网址、重置聊天与播放同步记录，方便同一部影视创建多个房间。
-                  </p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">分享链接</p>
