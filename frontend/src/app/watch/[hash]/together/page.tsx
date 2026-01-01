@@ -291,13 +291,29 @@ export default function TogetherPage() {
       const newMessages = data.filter((msg) => {
         if (messageIdsRef.current.has(msg.id)) return false;
         messageIdsRef.current.add(msg.id);
-        updateOnlineUser(msg.sender, msg.timestamp);
         return true;
       });
       if (data.length > 0) {
         const last = data[data.length - 1];
         chatSinceRef.current = last.timestamp;
       }
+      newMessages
+        .filter((message) => message.type === "presence")
+        .forEach((message) => {
+          try {
+            const meta = JSON.parse(message.content);
+            if (
+              meta?.action === "rename" &&
+              typeof meta.previous === "string" &&
+              meta.previous
+            ) {
+              onlineUsersRef.current.delete(meta.previous);
+            }
+          } catch {
+            // ignore invalid presence payload
+          }
+          updateOnlineUser(message.sender, message.timestamp);
+        });
       const chatMessages = newMessages.filter(
         (message) => message.type !== "presence",
       );
@@ -357,32 +373,43 @@ export default function TogetherPage() {
     }
   };
 
-  const sendPresenceHeartbeat = useCallback(async () => {
-    const senderName = stableDisplayNameRef.current;
-    if (!senderName) return;
-    const payload: ChatMessage = {
-      id: generateId(),
-      sender: senderName,
-      content: "heartbeat",
-      timestamp: new Date().toISOString(),
-      type: "presence",
-    };
-    try {
-      const res = await fetch(`${apiBaseUrl}/together/${hash}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        throw new Error("心跳发送失败");
+  const sendPresence = useCallback(
+    async (options?: { action?: "rename"; previousName?: string }) => {
+      const senderName = stableDisplayNameRef.current;
+      if (!senderName) return;
+      const content =
+        options?.action === "rename"
+          ? JSON.stringify({
+              action: "rename",
+              previous: options.previousName,
+            })
+          : "heartbeat";
+
+      const payload: ChatMessage = {
+        id: generateId(),
+        sender: senderName,
+        content,
+        timestamp: new Date().toISOString(),
+        type: "presence",
+      };
+      try {
+        const res = await fetch(`${apiBaseUrl}/together/${hash}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          throw new Error("心跳发送失败");
+        }
+        messageIdsRef.current.add(payload.id);
+        updateOnlineUser(senderName, payload.timestamp);
+        syncOnlineUsers();
+      } catch (err) {
+        console.error(err);
       }
-      messageIdsRef.current.add(payload.id);
-      updateOnlineUser(senderName, payload.timestamp);
-      syncOnlineUsers();
-    } catch (err) {
-      console.error(err);
-    }
-  }, [apiBaseUrl, generateId, hash, syncOnlineUsers, updateOnlineUser]);
+    },
+    [apiBaseUrl, generateId, hash, syncOnlineUsers, updateOnlineUser],
+  );
 
   // 加载播放数据
   useEffect(() => {
@@ -415,12 +442,12 @@ export default function TogetherPage() {
   }, [startPolling]);
 
   useEffect(() => {
-    sendPresenceHeartbeat();
+    sendPresence();
     if (heartbeatRef.current) {
       clearInterval(heartbeatRef.current);
     }
     heartbeatRef.current = setInterval(() => {
-      sendPresenceHeartbeat();
+      sendPresence();
       syncOnlineUsers();
     }, HEARTBEAT_INTERVAL_MS);
 
@@ -429,7 +456,7 @@ export default function TogetherPage() {
         clearInterval(heartbeatRef.current);
       }
     };
-  }, [sendPresenceHeartbeat, syncOnlineUsers]);
+  }, [sendPresence, syncOnlineUsers]);
 
   useEffect(() => {
     if (nameIdleTimerRef.current) {
@@ -444,7 +471,7 @@ export default function TogetherPage() {
         stableDisplayNameRef.current = displayName;
         onlineUsersRef.current.set(displayName, ts);
         syncOnlineUsers();
-        sendPresenceHeartbeat();
+        sendPresence({ action: "rename", previousName: prev });
       }
       nameIdleTimerRef.current = null;
     }, 3000);
@@ -455,7 +482,7 @@ export default function TogetherPage() {
         nameIdleTimerRef.current = null;
       }
     };
-  }, [displayName, sendPresenceHeartbeat, syncOnlineUsers]);
+  }, [displayName, sendPresence, syncOnlineUsers]);
 
   // 房主切换剧集后同步 URL 给房间成员
   useEffect(() => {
