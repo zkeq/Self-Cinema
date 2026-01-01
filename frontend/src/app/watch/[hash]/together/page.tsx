@@ -36,7 +36,7 @@ type ChatMessage = {
   sender: string;
   content: string;
   timestamp: string;
-  type?: "chat" | "system";
+  type?: "chat" | "system" | "presence";
 };
 
 declare global {
@@ -84,15 +84,23 @@ export default function TogetherPage() {
   );
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
   const [chatStatus, setChatStatus] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("connecting");
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatSinceRef = useRef<string | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const playbackPollRef = useRef<NodeJS.Timeout | null>(null);
   const [playbackVersion, setPlaybackVersion] = useState<number>(0);
   const [overrideSrc, setOverrideSrc] = useState<string | null>(null);
+  const messageIdsRef = useRef<Set<string>>(new Set());
+  const onlineUsersRef = useRef<Map<string, number>>(new Map());
+  const isSendingRef = useRef(false);
+
+  const ONLINE_WINDOW_MS = 45_000;
+  const HEARTBEAT_INTERVAL_MS = 20_000;
 
   const apiBaseUrl =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -138,6 +146,23 @@ export default function TogetherPage() {
     },
     [generateId],
   );
+
+  const updateOnlineUser = useCallback((name: string, timestamp: string) => {
+    if (!name) return;
+    const ts = new Date(timestamp).getTime();
+    if (Number.isNaN(ts)) return;
+    onlineUsersRef.current.set(name, ts);
+  }, []);
+
+  const syncOnlineUsers = useCallback(() => {
+    const now = Date.now();
+    const activeEntries = Array.from(onlineUsersRef.current.entries()).filter(
+      ([, ts]) => now - ts <= ONLINE_WINDOW_MS,
+    );
+    onlineUsersRef.current = new Map(activeEntries);
+    const active = activeEntries.map(([name]) => name);
+    setOnlineUsers(active);
+  }, []);
 
   const applyMinimizeDefault = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -261,17 +286,29 @@ export default function TogetherPage() {
         throw new Error("获取消息失败");
       }
       const data: ChatMessage[] = await res.json();
+      const newMessages = data.filter((msg) => {
+        if (messageIdsRef.current.has(msg.id)) return false;
+        messageIdsRef.current.add(msg.id);
+        updateOnlineUser(msg.sender, msg.timestamp);
+        return true;
+      });
       if (data.length > 0) {
-        setMessages((prev) => [...prev, ...data]);
         const last = data[data.length - 1];
         chatSinceRef.current = last.timestamp;
       }
+      const chatMessages = newMessages.filter(
+        (message) => message.type !== "presence",
+      );
+      if (chatMessages.length > 0) {
+        setMessages((prev) => [...prev, ...chatMessages]);
+      }
+      syncOnlineUsers();
       setChatStatus("connected");
     } catch (err) {
       console.error(err);
       setChatStatus("disconnected");
     }
-  }, [apiBaseUrl, hash]);
+  }, [apiBaseUrl, hash, syncOnlineUsers, updateOnlineUser]);
 
   const startPolling = useCallback(() => {
     setChatStatus("connecting");
@@ -283,7 +320,8 @@ export default function TogetherPage() {
   }, [fetchMessages]);
 
   const sendMessage = async () => {
-    if (!messageInput.trim()) return;
+    if (!messageInput.trim() || isSendingRef.current) return;
+    isSendingRef.current = true;
 
     const payload: ChatMessage = {
       id: generateId(),
@@ -302,15 +340,45 @@ export default function TogetherPage() {
       if (!res.ok) {
         throw new Error("发送失败");
       }
+      messageIdsRef.current.add(payload.id);
+      updateOnlineUser(payload.sender, payload.timestamp);
       setMessages((prev) => [...prev, payload]);
       chatSinceRef.current = payload.timestamp;
+      syncOnlineUsers();
       setChatStatus("connected");
       setMessageInput("");
     } catch (err) {
       console.error(err);
       setChatStatus("disconnected");
+    } finally {
+      isSendingRef.current = false;
     }
   };
+
+  const sendPresenceHeartbeat = useCallback(async () => {
+    const payload: ChatMessage = {
+      id: generateId(),
+      sender: displayName,
+      content: "heartbeat",
+      timestamp: new Date().toISOString(),
+      type: "presence",
+    };
+    try {
+      const res = await fetch(`${apiBaseUrl}/together/${hash}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        throw new Error("心跳发送失败");
+      }
+      messageIdsRef.current.add(payload.id);
+      updateOnlineUser(payload.sender, payload.timestamp);
+      syncOnlineUsers();
+    } catch (err) {
+      console.error(err);
+    }
+  }, [apiBaseUrl, displayName, generateId, hash, syncOnlineUsers, updateOnlineUser]);
 
   // 加载播放数据
   useEffect(() => {
@@ -341,6 +409,23 @@ export default function TogetherPage() {
       }
     };
   }, [startPolling]);
+
+  useEffect(() => {
+    sendPresenceHeartbeat();
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+    }
+    heartbeatRef.current = setInterval(() => {
+      sendPresenceHeartbeat();
+      syncOnlineUsers();
+    }, HEARTBEAT_INTERVAL_MS);
+
+    return () => {
+      if (heartbeatRef.current) {
+        clearInterval(heartbeatRef.current);
+      }
+    };
+  }, [sendPresenceHeartbeat, syncOnlineUsers]);
 
   // 房主切换剧集后同步 URL 给房间成员
   useEffect(() => {
@@ -428,8 +513,8 @@ export default function TogetherPage() {
   }, [displayName]);
 
   useEffect(() => {
-        applyMinimizeDefault();
-  }, []);
+    applyMinimizeDefault();
+  }, [applyMinimizeDefault]);
 
   // 注入 VideoTogether 脚本
   useEffect(() => {
@@ -525,7 +610,7 @@ export default function TogetherPage() {
 
       <div className="container mx-auto px-4 py-6">
         <div className="grid lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-4">
+          <div className="lg:col-span-2 space-y-4 order-1">
             <Card className="overflow-hidden">
               <CardHeader className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
@@ -601,7 +686,111 @@ export default function TogetherPage() {
                 </div>
               </CardContent>
             </Card>
+          </div>
 
+          <div className="space-y-4 order-2 lg:order-1 lg:col-span-1 lg:row-span-3">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2">
+                  <MessageCircle className="h-5 w-5 text-primary" />
+                  同步聊天室
+                </CardTitle>
+                <CardDescription className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="secondary"
+                    className={
+                      chatStatus === "connected"
+                        ? "bg-green-500/80 text-white"
+                        : "bg-amber-200 text-amber-900"
+                    }
+                  >
+                    {chatStatus === "connected" ? "已连接" : "连接已断开"}
+                  </Badge>
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                    <span>在线 {onlineUsers.length} 人</span>
+                    <div className="flex flex-wrap gap-1">
+                      {onlineUsers.map((user) => (
+                        <Badge key={user} variant="outline" className="text-[11px]">
+                          {user}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">我的昵称</p>
+                  <Input
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                  />
+                </div>
+                <Separator />
+                <div
+                  className="h-[420px] rounded-lg border bg-muted/40 p-3 overflow-y-auto"
+                  ref={chatScrollRef}
+                >
+                  <div className="space-y-3">
+                    {messages
+                      .filter((message) => message.type !== "presence")
+                      .map((message) => (
+                        <div key={message.id} className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">{message.sender}</Badge>
+                              {message.type === "system" && (
+                                <Badge variant="secondary">系统</Badge>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-muted-foreground">
+                              {new Date(message.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <p className="text-sm whitespace-pre-wrap">
+                            {message.content}
+                          </p>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="输入聊天内容，回车发送"
+                    value={messageInput}
+                    onChange={(e) => setMessageInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                      }
+                    }}
+                  />
+                  <Button onClick={sendMessage} className="gap-2">
+                    <Send className="h-4 w-4" />
+                    发送
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Share2 className="h-4 w-4 text-primary" />
+                  使用说明
+                </CardTitle>
+                <CardDescription className="space-y-2 text-sm">
+                  <p>1. 页面加载完成后会自动注入 VideoTogether 脚本。</p>
+                  <p>2. 默认创建房间并开启“窗口默认最小化”选项。</p>
+                  <p>3. 将上方分享链接发给好友，访客会自动加入房间。</p>
+                  <p>4. 房主切换剧集时，成员的视频地址会一起更新。</p>
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </div>
+
+          <div className="lg:col-span-2 space-y-4 order-3 lg:order-2">
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">
@@ -622,16 +811,18 @@ export default function TogetherPage() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">分享链接</p>
-                  <div className="flex gap-2 items-center">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center">
                     <Input value={shareLink} readOnly className="font-mono" />
-                    <Button variant="outline" size="icon" onClick={copyShareLink}>
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                    <Link href={shareLink}>
-                      <Button variant="secondary" size="icon">
-                        <Link2 className="h-4 w-4" />
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="icon" onClick={copyShareLink}>
+                        <Copy className="h-4 w-4" />
                       </Button>
-                    </Link>
+                      <Link href={shareLink}>
+                        <Button variant="secondary" size="icon">
+                          <Link2 className="h-4 w-4" />
+                        </Button>
+                      </Link>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -682,99 +873,6 @@ export default function TogetherPage() {
                   </div>
                 </ScrollArea>
               </CardContent>
-            </Card>
-          </div>
-
-          <div className="space-y-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2">
-                  <MessageCircle className="h-5 w-5 text-primary" />
-                  同步聊天室
-                </CardTitle>
-                <CardDescription className="flex items-center gap-2">
-                  <Badge
-                    variant="secondary"
-                    className={
-                      chatStatus === "connected"
-                        ? "bg-green-500/80 text-white"
-                        : "bg-amber-200 text-amber-900"
-                    }
-                  >
-                    {chatStatus === "connected" ? "已连接" : "连接已断开"}
-                  </Badge>
-                  <span className="text-muted-foreground text-sm">
-                    房间内成员可以实时交流
-                  </span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">我的昵称</p>
-                  <Input
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                  />
-                </div>
-                <Separator />
-                <div
-                  className="h-[420px] rounded-lg border bg-muted/40 p-3 overflow-y-auto"
-                  ref={chatScrollRef}
-                >
-                  <div className="space-y-3">
-                    {messages.map((message) => (
-                      <div key={message.id} className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline">{message.sender}</Badge>
-                            {message.type === "system" && (
-                              <Badge variant="secondary">系统</Badge>
-                            )}
-                          </div>
-                          <span className="text-[11px] text-muted-foreground">
-                            {new Date(message.timestamp).toLocaleTimeString()}
-                          </span>
-                        </div>
-                        <p className="text-sm whitespace-pre-wrap">
-                          {message.content}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="输入聊天内容，回车发送"
-                    value={messageInput}
-                    onChange={(e) => setMessageInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage();
-                      }
-                    }}
-                  />
-                  <Button onClick={sendMessage} className="gap-2">
-                    <Send className="h-4 w-4" />
-                    发送
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Share2 className="h-4 w-4 text-primary" />
-                  使用说明
-                </CardTitle>
-                <CardDescription className="space-y-2 text-sm">
-                  <p>1. 页面加载完成后会自动注入 VideoTogether 脚本。</p>
-                  <p>2. 默认创建房间并开启“窗口默认最小化”选项。</p>
-                  <p>3. 将上方分享链接发给好友，访客会自动加入房间。</p>
-                  <p>4. 房主切换剧集时，成员的视频地址会一起更新。</p>
-                </CardDescription>
-              </CardHeader>
             </Card>
           </div>
         </div>
