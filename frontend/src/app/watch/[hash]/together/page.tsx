@@ -98,6 +98,7 @@ export default function TogetherPage() {
   const messageIdsRef = useRef<Set<string>>(new Set());
   const onlineUsersRef = useRef<Map<string, number>>(new Map());
   const isSendingRef = useRef(false);
+  const previousDisplayNameRef = useRef(displayName);
 
   const ONLINE_WINDOW_MS = 45_000;
   const HEARTBEAT_INTERVAL_MS = 20_000;
@@ -426,6 +427,19 @@ export default function TogetherPage() {
       }
     };
   }, [sendPresenceHeartbeat, syncOnlineUsers]);
+
+  useEffect(() => {
+    const prev = previousDisplayNameRef.current;
+    if (prev && prev !== displayName) {
+      const ts = onlineUsersRef.current.get(prev);
+      if (ts) {
+        onlineUsersRef.current.delete(prev);
+        onlineUsersRef.current.set(displayName, ts);
+        syncOnlineUsers();
+      }
+    }
+    previousDisplayNameRef.current = displayName;
+  }, [displayName, syncOnlineUsers]);
 
   // 房主切换剧集后同步 URL 给房间成员
   useEffect(() => {
