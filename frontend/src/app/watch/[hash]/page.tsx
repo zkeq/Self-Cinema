@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +35,9 @@ export default function WatchPage() {
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [watchProgress, setWatchProgress] = useState(65);
   const [episodeStatuses, setEpisodeStatuses] = useState<Record<string, string>>({});
+  const createRoomId = () => `room-${hash}-${Math.random().toString(36).slice(2, 8)}`;
+  const createRoomPassword = () =>
+    `pass-${hash}-${Math.random().toString(36).slice(2, 8)}`;
 
   // 获取数据
   useEffect(() => {
@@ -92,6 +94,15 @@ export default function WatchPage() {
     
     // 延迟更新状态，让播放器有时间保存进度
     setTimeout(updateEpisodeStatuses, 500);
+  };
+
+  const handleStartTogether = () => {
+    const url = new URL(`${window.location.origin}/watch/${hash}/together`);
+    url.searchParams.set("action", "create");
+    url.searchParams.set("episode", currentEpisode.toString());
+    url.searchParams.set("room", createRoomId());
+    url.searchParams.set("password", createRoomPassword());
+    router.push(url.pathname + url.search);
   };
 
   // 加载状态
@@ -154,12 +165,15 @@ export default function WatchPage() {
               <Button variant="ghost" size="sm" onClick={() => setIsBookmarked(!isBookmarked)}>
                 <Bookmark className={`h-4 w-4 ${isBookmarked ? 'fill-primary text-primary' : ''}`} />
               </Button>
-              <Link href={`/watch/${hash}/together?action=create&episode=${currentEpisode}`}>
-                <Button variant="secondary" size="sm" className="gap-2">
-                  <Users className="h-4 w-4" />
-                  一起看
-                </Button>
-              </Link>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="gap-2"
+                onClick={handleStartTogether}
+              >
+                <Users className="h-4 w-4" />
+                一起看
+              </Button>
               <Button variant="ghost" size="sm">
                 <Share2 className="h-4 w-4" />
               </Button>
