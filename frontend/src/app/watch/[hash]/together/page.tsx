@@ -431,12 +431,11 @@ export default function TogetherPage() {
   useEffect(() => {
     const prev = previousDisplayNameRef.current;
     if (prev && prev !== displayName) {
-      const ts = onlineUsersRef.current.get(prev);
-      if (ts) {
-        onlineUsersRef.current.delete(prev);
-        onlineUsersRef.current.set(displayName, ts);
-        syncOnlineUsers();
-      }
+      const ts =
+        onlineUsersRef.current.get(prev) ?? new Date().getTime();
+      onlineUsersRef.current.delete(prev);
+      onlineUsersRef.current.set(displayName, ts);
+      syncOnlineUsers();
     }
     previousDisplayNameRef.current = displayName;
   }, [displayName, syncOnlineUsers]);
