@@ -188,6 +188,17 @@ class PlaybackStore:
 
 playback_store = PlaybackStore()
 
+
+def build_room_key(room_hash: str, room_id: Optional[str] = None, fallback_room: Optional[str] = None) -> str:
+    """
+    根据房间 hash 与 room_id 构造唯一房间 key。
+    兼容旧版本：如果未提供 room_id，则退回到 room_hash。
+    """
+    room_identifier = (room_id or fallback_room or "").strip()
+    if room_identifier:
+        return f"{room_hash}::{room_identifier}"
+    return room_hash
+
 # 依赖函数
 def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
     """获取当前管理员"""
@@ -508,11 +519,17 @@ async def get_watch_data(hash: str, db: Session = Depends(get_db)):
     )
 
 @app.post("/together/{room_hash}/messages", response_model=ChatMessage)
-async def post_chat_message(room_hash: str, payload: ChatMessageCreate):
+async def post_chat_message(
+    room_hash: str,
+    payload: ChatMessageCreate,
+    room_id: Optional[str] = Query(None, alias="roomId"),
+    room: Optional[str] = Query(None),
+):
     """通过HTTP提交聊天室消息，便于轮询"""
     if not payload.content:
         raise HTTPException(status_code=400, detail="Message content is required")
 
+    room_key = build_room_key(room_hash, room_id, room)
     message = ChatMessage(
         id=payload.id or str(uuid.uuid4()),
         sender=payload.sender or "匿名用户",
@@ -520,11 +537,16 @@ async def post_chat_message(room_hash: str, payload: ChatMessageCreate):
         timestamp=payload.timestamp or datetime.utcnow(),
         type=payload.type or "chat",
     )
-    return chat_store.add_message(room_hash, message)
+    return chat_store.add_message(room_key, message)
 
 
 @app.get("/together/{room_hash}/messages", response_model=List[ChatMessage])
-async def get_chat_messages(room_hash: str, since: Optional[str] = Query(None)):
+async def get_chat_messages(
+    room_hash: str,
+    since: Optional[str] = Query(None),
+    room_id: Optional[str] = Query(None, alias="roomId"),
+    room: Optional[str] = Query(None),
+):
     """轮询获取聊天室消息，可通过 since 过滤"""
     since_dt = None
     if since:
@@ -533,14 +555,21 @@ async def get_chat_messages(room_hash: str, since: Optional[str] = Query(None)):
             since_dt = datetime.fromisoformat(normalized)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid 'since' format, expected ISO8601")
-    return chat_store.get_messages(room_hash, since_dt)
+    room_key = build_room_key(room_hash, room_id, room)
+    return chat_store.get_messages(room_key, since_dt)
 
 @app.post("/together/{room_hash}/playback", response_model=PlaybackResponse)
-async def update_playback(room_hash: str, payload: PlaybackUpdate):
+async def update_playback(
+    room_hash: str,
+    payload: PlaybackUpdate,
+    room_id: Optional[str] = Query(None, alias="roomId"),
+    room: Optional[str] = Query(None),
+):
     """房主更新当前播放地址"""
     if not payload.url:
         raise HTTPException(status_code=400, detail="url is required")
-    state = playback_store.update(room_hash, payload.url)
+    room_key = build_room_key(room_hash, room_id, room)
+    state = playback_store.update(room_key, payload.url)
     return PlaybackResponse(**state.dict())
 
 
@@ -549,6 +578,8 @@ async def get_playback(
     room_hash: str,
     version: Optional[str] = Query(None),
     current_url: Optional[str] = Query(None, alias="currentUrl"),
+    room_id: Optional[str] = Query(None, alias="roomId"),
+    room: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -561,7 +592,8 @@ async def get_playback(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid 'version', expected integer or empty")
 
-    state = playback_store.get(room_hash)
+    room_key = build_room_key(room_hash, room_id, room)
+    state = playback_store.get(room_key)
     if not state:
         raise HTTPException(status_code=404, detail="No playback state")
 

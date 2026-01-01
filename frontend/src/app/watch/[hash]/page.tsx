@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +81,18 @@ export default function WatchPage() {
     }
   }, [currentEpisode, episodes]);
 
+  const buildTogetherUrl = useCallback(
+    (roomId: string) =>
+      `/watch/${hash}/together?action=create&episode=${currentEpisode}&roomId=${roomId}`,
+    [currentEpisode, hash],
+  );
+
+  const handleCreateTogether = useCallback(() => {
+    const randomPart = Math.random().toString(36).slice(2, 8);
+    const roomId = `room-${hash}-${randomPart}`;
+    router.push(buildTogetherUrl(roomId));
+  }, [buildTogetherUrl, hash, router]);
+
   const handleEpisodeChange = (episodeNumber: number) => {
     setCurrentEpisode(episodeNumber);
     
@@ -154,12 +165,15 @@ export default function WatchPage() {
               <Button variant="ghost" size="sm" onClick={() => setIsBookmarked(!isBookmarked)}>
                 <Bookmark className={`h-4 w-4 ${isBookmarked ? 'fill-primary text-primary' : ''}`} />
               </Button>
-              <Link href={`/watch/${hash}/together?action=create&episode=${currentEpisode}`}>
-                <Button variant="secondary" size="sm" className="gap-2">
-                  <Users className="h-4 w-4" />
-                  一起看
-                </Button>
-              </Link>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="gap-2"
+                onClick={handleCreateTogether}
+              >
+                <Users className="h-4 w-4" />
+                一起看
+              </Button>
               <Button variant="ghost" size="sm">
                 <Share2 className="h-4 w-4" />
               </Button>

@@ -55,7 +55,14 @@ export default function TogetherPage() {
   const hash = params.hash as string;
 
   const initialEpisode = parseInt(searchParams.get("episode") || "1", 10);
-  const initialRoom = searchParams.get("room") || `movie-${hash}`;
+  const buildRandomRoomId = useCallback(
+    () => `room-${hash}-${Math.random().toString(36).slice(2, 8)}`,
+    [hash],
+  );
+  const initialRoom =
+    searchParams.get("roomId") ||
+    searchParams.get("room") ||
+    buildRandomRoomId();
   const initialPassword = searchParams.get("password") || `pass-${hash}`;
   const initialAction =
     (searchParams.get("action") as "create" | "join" | null) || "join";
@@ -75,9 +82,9 @@ export default function TogetherPage() {
   const [vtReady, setVtReady] = useState(false);
   const [vtStatus, setVtStatus] = useState<string>("插件未加载");
   const [isHost, setIsHost] = useState(initialAction === "create");
-  const isJoinLink = initialAction === "join";
   const roomInitializedRef = useRef(false);
   const settingsAppliedRef = useRef(false);
+  const lastStableRoomRef = useRef(initialRoom);
 
   const [displayName, setDisplayName] = useState(
     `影迷${Math.floor(Math.random() * 900 + 100)}`,
@@ -107,6 +114,39 @@ export default function TogetherPage() {
   const apiBaseUrl =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+  const activeRoomName = useMemo(() => {
+    const trimmed = roomName.trim();
+    return trimmed || lastStableRoomRef.current || initialRoom;
+  }, [initialRoom, roomName]);
+
+  const roomQueryString = useMemo(
+    () => `roomId=${encodeURIComponent(activeRoomName)}`,
+    [activeRoomName],
+  );
+
+  const withRoomQuery = useCallback(
+    (url: string) =>
+      `${url}${url.includes("?") ? "&" : "?"}${roomQueryString}`,
+    [roomQueryString],
+  );
+
+  useEffect(() => {
+    const trimmed = roomName.trim();
+    if (trimmed) {
+      lastStableRoomRef.current = trimmed;
+    }
+  }, [roomName]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set("roomId", activeRoomName);
+    nextUrl.searchParams.set("password", roomPassword);
+    nextUrl.searchParams.set("action", roomAction);
+    nextUrl.searchParams.set("episode", currentEpisode.toString());
+    window.history.replaceState({}, "", nextUrl.toString());
+  }, [activeRoomName, currentEpisode, roomAction, roomPassword]);
+
   const shareLink = useMemo(() => {
     if (typeof window === "undefined") {
       return "";
@@ -115,11 +155,11 @@ export default function TogetherPage() {
       `${window.location.origin}/watch/${hash}/together`,
     );
     url.searchParams.set("action", "join");
-    url.searchParams.set("room", roomName);
+    url.searchParams.set("roomId", activeRoomName);
     url.searchParams.set("password", roomPassword);
     url.searchParams.set("episode", currentEpisode.toString());
     return url.toString();
-  }, [currentEpisode, hash, roomName, roomPassword]);
+  }, [activeRoomName, currentEpisode, hash, roomPassword]);
 
   const currentEpisodeData = episodes.find(
     (item) => item.episode === currentEpisode,
@@ -184,29 +224,41 @@ export default function TogetherPage() {
     settingsAppliedRef.current = true;
   }, []);
 
-  const handleCreateRoom = useCallback(() => {
-    if (!window.videoTogetherExtension) {
-      setVtStatus("插件还未初始化完成");
-      return;
-    }
-    window.videoTogetherExtension.CreateRoom(roomName, roomPassword);
-    setIsHost(true);
-    setVtStatus("已创建房间并成为房主");
-    roomInitializedRef.current = true;
-    applyMinimizeDefault();
-  }, [applyMinimizeDefault, roomName, roomPassword]);
+  const handleCreateRoom = useCallback(
+    (customRoomName?: string) => {
+      if (!window.videoTogetherExtension) {
+        setVtStatus("插件还未初始化完成");
+        return;
+      }
+      const targetRoom = customRoomName || activeRoomName;
+      window.videoTogetherExtension.CreateRoom(targetRoom, roomPassword);
+      setRoomName(targetRoom);
+      setIsHost(true);
+      setRoomAction("create");
+      setVtStatus("已创建房间并成为房主");
+      roomInitializedRef.current = true;
+      applyMinimizeDefault();
+    },
+    [activeRoomName, applyMinimizeDefault, roomPassword],
+  );
 
-  const handleJoinRoom = useCallback(() => {
-    if (!window.videoTogetherExtension) {
-      setVtStatus("插件还未初始化完成");
-      return;
-    }
-    window.videoTogetherExtension.JoinRoom(roomName, roomPassword);
-    setIsHost(false);
-    setVtStatus("已加入房间");
-    roomInitializedRef.current = true;
-    applyMinimizeDefault();
-  }, [applyMinimizeDefault, roomName, roomPassword]);
+  const handleJoinRoom = useCallback(
+    (customRoomName?: string) => {
+      if (!window.videoTogetherExtension) {
+        setVtStatus("插件还未初始化完成");
+        return;
+      }
+      const targetRoom = customRoomName || activeRoomName;
+      window.videoTogetherExtension.JoinRoom(targetRoom, roomPassword);
+      setRoomName(targetRoom);
+      setIsHost(false);
+      setRoomAction("join");
+      setVtStatus("已加入房间");
+      roomInitializedRef.current = true;
+      applyMinimizeDefault();
+    },
+    [activeRoomName, applyMinimizeDefault, roomPassword],
+  );
 
   const handleEpisodeChange = useCallback((episodeNumber: number) => {
     setCurrentEpisode(episodeNumber);
@@ -219,7 +271,7 @@ export default function TogetherPage() {
 
   const syncRoomVideo = useCallback(
     async (videoUrl: string) => {
-      if (!window.videoTogetherExtension || !roomName || !videoUrl) {
+      if (!window.videoTogetherExtension || !activeRoomName || !videoUrl) {
         return;
       }
 
@@ -241,7 +293,7 @@ export default function TogetherPage() {
         };
         const localTs = vt.getLocalTimestamp?.() ?? Date.now() / 1000;
         vt.UpdateRoom?.(
-          roomName,
+          activeRoomName,
           roomPassword,
           videoUrl,
           1,
@@ -255,7 +307,7 @@ export default function TogetherPage() {
 
       // 2) 通知后台轮询接口
       try {
-        await fetch(`${apiBaseUrl}/together/${hash}/playback`, {
+        await fetch(withRoomQuery(`${apiBaseUrl}/together/${hash}/playback`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url: videoUrl }),
@@ -264,7 +316,7 @@ export default function TogetherPage() {
         console.error("同步房间播放地址失败", err);
       }
     },
-    [apiBaseUrl, hash, isHost, roomName, roomPassword],
+    [activeRoomName, apiBaseUrl, hash, isHost, roomPassword, withRoomQuery],
   );
 
   const copyShareLink = async () => {
@@ -279,10 +331,10 @@ export default function TogetherPage() {
   const fetchMessages = useCallback(async () => {
     try {
       const since = chatSinceRef.current
-        ? `?since=${encodeURIComponent(chatSinceRef.current)}`
+        ? `&since=${encodeURIComponent(chatSinceRef.current)}`
         : "";
       const res = await fetch(
-        `${apiBaseUrl}/together/${hash}/messages${since}`,
+        `${apiBaseUrl}/together/${hash}/messages?${roomQueryString}${since}`,
       );
       if (!res.ok) {
         throw new Error("获取消息失败");
@@ -326,7 +378,7 @@ export default function TogetherPage() {
       console.error(err);
       setChatStatus("disconnected");
     }
-  }, [apiBaseUrl, hash, syncOnlineUsers, updateOnlineUser]);
+  }, [apiBaseUrl, hash, roomQueryString, syncOnlineUsers, updateOnlineUser]);
 
   const startPolling = useCallback(() => {
     setChatStatus("connecting");
@@ -336,6 +388,44 @@ export default function TogetherPage() {
     }
     pollTimerRef.current = setInterval(fetchMessages, 2500);
   }, [fetchMessages]);
+
+  const handleRegenerateRoom = useCallback(() => {
+    const nextRoom = buildRandomRoomId();
+    roomInitializedRef.current = false;
+    setRoomName(nextRoom);
+    setRoomAction("create");
+    setIsHost(true);
+    setVtStatus("已创建新的房间 ID，等待插件初始化");
+    messageIdsRef.current.clear();
+    chatSinceRef.current = null;
+    onlineUsersRef.current.clear();
+    setMessages([]);
+    setOnlineUsers([]);
+    setPlaybackVersion(0);
+    setOverrideSrc(null);
+    if (playbackPollRef.current) {
+      clearInterval(playbackPollRef.current);
+      playbackPollRef.current = null;
+    }
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    addSystemMessage("已生成新的房间 ID，请分享最新链接给好友");
+    if (vtReady) {
+      handleCreateRoom(nextRoom);
+    }
+    if (currentEpisodeData?.videoUrl) {
+      setTimeout(() => syncRoomVideo(currentEpisodeData.videoUrl), 200);
+    }
+  }, [
+    addSystemMessage,
+    buildRandomRoomId,
+    currentEpisodeData?.videoUrl,
+    handleCreateRoom,
+    syncRoomVideo,
+    vtReady,
+  ]);
 
   const sendMessage = async () => {
     if (!messageInput.trim() || isSendingRef.current) return;
@@ -350,11 +440,14 @@ export default function TogetherPage() {
     };
 
     try {
-      const res = await fetch(`${apiBaseUrl}/together/${hash}/messages`, {
+      const res = await fetch(
+        `${apiBaseUrl}/together/${hash}/messages?${roomQueryString}`,
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      });
+        },
+      );
       if (!res.ok) {
         throw new Error("发送失败");
       }
@@ -393,11 +486,14 @@ export default function TogetherPage() {
         type: "presence",
       };
       try {
-        const res = await fetch(`${apiBaseUrl}/together/${hash}/messages`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        const res = await fetch(
+          `${apiBaseUrl}/together/${hash}/messages?${roomQueryString}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+        );
         if (!res.ok) {
           throw new Error("心跳发送失败");
         }
@@ -408,7 +504,14 @@ export default function TogetherPage() {
         console.error(err);
       }
     },
-    [apiBaseUrl, generateId, hash, syncOnlineUsers, updateOnlineUser],
+    [
+      apiBaseUrl,
+      generateId,
+      hash,
+      roomQueryString,
+      syncOnlineUsers,
+      updateOnlineUser,
+    ],
   );
 
   // 加载播放数据
@@ -440,6 +543,15 @@ export default function TogetherPage() {
       }
     };
   }, [startPolling]);
+
+  useEffect(() => {
+    messageIdsRef.current.clear();
+    chatSinceRef.current = null;
+    onlineUsersRef.current.clear();
+    setMessages([]);
+    setOnlineUsers([]);
+    setChatStatus("connecting");
+  }, [roomQueryString]);
 
   useEffect(() => {
     sendPresence();
@@ -498,7 +610,7 @@ export default function TogetherPage() {
       const currentPlaybackUrl =
         overrideSrc || currentEpisodeData?.videoUrl || "";
       const res = await fetch(
-        `${apiBaseUrl}/together/${hash}/playback?version=${playbackVersion || ""}&currentUrl=${encodeURIComponent(currentPlaybackUrl)}`,
+        `${apiBaseUrl}/together/${hash}/playback?${roomQueryString}&version=${playbackVersion || ""}&currentUrl=${encodeURIComponent(currentPlaybackUrl)}`,
       );
       if (!res.ok) return;
       const data: {
@@ -534,6 +646,7 @@ export default function TogetherPage() {
     hash,
     overrideSrc,
     playbackVersion,
+    roomQueryString,
   ]);
 
   useEffect(() => {
@@ -549,6 +662,15 @@ export default function TogetherPage() {
       }
     };
   }, [fetchPlayback, isHost]);
+
+  useEffect(() => {
+    setPlaybackVersion(0);
+    setOverrideSrc(null);
+    if (playbackPollRef.current) {
+      clearInterval(playbackPollRef.current);
+      playbackPollRef.current = null;
+    }
+  }, [roomQueryString]);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -642,7 +764,7 @@ export default function TogetherPage() {
                 {series.title}
               </h1>
               <p className="text-xs text-muted-foreground">
-                一起看房间 · {roomName}
+                一起看房间 · {activeRoomName}
               </p>
             </div>
           </div>
@@ -666,21 +788,19 @@ export default function TogetherPage() {
                     正在播放 · 第 {currentEpisode} 集
                   </CardTitle>
                   <div className="flex items-center gap-2">
-                    {!isJoinLink && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                        onClick={() => {
-                          setRoomAction("create");
-                          handleCreateRoom();
-                        }}
-                        disabled={!vtReady}
-                      >
-                        <ShieldCheck className="h-4 w-4" />
-                        房主创建
-                      </Button>
-                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => {
+                        setRoomAction("create");
+                        handleCreateRoom();
+                      }}
+                      disabled={!vtReady}
+                    >
+                      <ShieldCheck className="h-4 w-4" />
+                      房主创建
+                    </Button>
                     {!isHost && (
                       <Button
                         variant="outline"
@@ -700,11 +820,11 @@ export default function TogetherPage() {
                       <Button
                         size="sm"
                         className="gap-2"
-                        onClick={handleCreateRoom}
+                        onClick={handleRegenerateRoom}
                         disabled={!vtReady}
                       >
                         <Share2 className="h-4 w-4" />
-                        重新创建
+                        新建房间
                       </Button>
                     )}
                   </div>
@@ -853,7 +973,10 @@ export default function TogetherPage() {
                   <p className="text-sm text-muted-foreground">房间名</p>
                   <Input
                     value={roomName}
-                    onChange={(e) => setRoomName(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setRoomName(value === "" ? buildRandomRoomId() : value);
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
