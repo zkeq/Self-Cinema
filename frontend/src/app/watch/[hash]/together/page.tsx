@@ -427,6 +427,10 @@ export default function TogetherPage() {
     localStorage.setItem("together-display-name", displayName);
   }, [displayName]);
 
+  useEffect(() => {
+        applyMinimizeDefault();
+  }, []);
+
   // 注入 VideoTogether 脚本
   useEffect(() => {
     const existing = document.getElementById("video-together-loader");
