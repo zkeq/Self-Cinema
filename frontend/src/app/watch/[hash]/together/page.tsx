@@ -98,7 +98,8 @@ export default function TogetherPage() {
   const messageIdsRef = useRef<Set<string>>(new Set());
   const onlineUsersRef = useRef<Map<string, number>>(new Map());
   const isSendingRef = useRef(false);
-  const previousDisplayNameRef = useRef(displayName);
+  const stableDisplayNameRef = useRef(displayName);
+  const nameIdleTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const ONLINE_WINDOW_MS = 45_000;
   const HEARTBEAT_INTERVAL_MS = 20_000;
@@ -357,9 +358,11 @@ export default function TogetherPage() {
   };
 
   const sendPresenceHeartbeat = useCallback(async () => {
+    const senderName = stableDisplayNameRef.current;
+    if (!senderName) return;
     const payload: ChatMessage = {
       id: generateId(),
-      sender: displayName,
+      sender: senderName,
       content: "heartbeat",
       timestamp: new Date().toISOString(),
       type: "presence",
@@ -374,12 +377,12 @@ export default function TogetherPage() {
         throw new Error("心跳发送失败");
       }
       messageIdsRef.current.add(payload.id);
-      updateOnlineUser(payload.sender, payload.timestamp);
+      updateOnlineUser(senderName, payload.timestamp);
       syncOnlineUsers();
     } catch (err) {
       console.error(err);
     }
-  }, [apiBaseUrl, displayName, generateId, hash, syncOnlineUsers, updateOnlineUser]);
+  }, [apiBaseUrl, generateId, hash, syncOnlineUsers, updateOnlineUser]);
 
   // 加载播放数据
   useEffect(() => {
@@ -429,16 +432,30 @@ export default function TogetherPage() {
   }, [sendPresenceHeartbeat, syncOnlineUsers]);
 
   useEffect(() => {
-    const prev = previousDisplayNameRef.current;
-    if (prev && prev !== displayName) {
-      const ts =
-        onlineUsersRef.current.get(prev) ?? new Date().getTime();
-      onlineUsersRef.current.delete(prev);
-      onlineUsersRef.current.set(displayName, ts);
-      syncOnlineUsers();
+    if (nameIdleTimerRef.current) {
+      clearTimeout(nameIdleTimerRef.current);
     }
-    previousDisplayNameRef.current = displayName;
-  }, [displayName, syncOnlineUsers]);
+
+    nameIdleTimerRef.current = setTimeout(() => {
+      const prev = stableDisplayNameRef.current;
+      if (prev !== displayName) {
+        const ts = onlineUsersRef.current.get(prev) ?? Date.now();
+        onlineUsersRef.current.delete(prev);
+        stableDisplayNameRef.current = displayName;
+        onlineUsersRef.current.set(displayName, ts);
+        syncOnlineUsers();
+        sendPresenceHeartbeat();
+      }
+      nameIdleTimerRef.current = null;
+    }, 3000);
+
+    return () => {
+      if (nameIdleTimerRef.current) {
+        clearTimeout(nameIdleTimerRef.current);
+        nameIdleTimerRef.current = null;
+      }
+    };
+  }, [displayName, sendPresenceHeartbeat, syncOnlineUsers]);
 
   // 房主切换剧集后同步 URL 给房间成员
   useEffect(() => {
