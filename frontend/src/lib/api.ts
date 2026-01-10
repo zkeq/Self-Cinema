@@ -83,6 +83,57 @@ export interface ShareResponse {
   expiresAt?: string;
 }
 
+export interface ResourceSite {
+  key: string;
+  name: string;
+  api: string;
+  detail?: string;
+}
+
+export interface ResourceSearchItem {
+  vod_id: number;
+  vod_name: string;
+  vod_sub?: string;
+  vod_pic?: string;
+  vod_remarks?: string;
+  vod_year?: string;
+  vod_actor?: string;
+  vod_director?: string;
+  type_name?: string;
+}
+
+export interface ResourceSearchResponse {
+  site: string;
+  page: number;
+  pagecount: number;
+  total: number;
+  list: ResourceSearchItem[];
+}
+
+export interface ResourceImportRequest {
+  site: string;
+  vod_id: number;
+}
+
+export interface ResourceImportResponse {
+  series: SeriesAPI;
+  episodes: EpisodeAPI[];
+}
+
+export interface ResourcePreviewEpisode {
+  episode: number;
+  title: string;
+  url: string;
+}
+
+export interface ResourcePreviewResponse {
+  site: string;
+  vod_id: number;
+  title: string;
+  cover?: string;
+  episodes: ResourcePreviewEpisode[];
+}
+
 class ApiClient {
   private api: AxiosInstance;
 
@@ -174,6 +225,37 @@ class ApiClient {
 
   async getWatchData(hash: string): Promise<{series: SeriesAPI, episodes: EpisodeAPI[]}> {
     const response = await this.api.get(`/watch/${hash}`);
+    return response.data;
+  }
+
+  async getResourceSites(): Promise<ResourceSite[]> {
+    const response = await this.api.get('/resource-sites');
+    return response.data;
+  }
+
+  async searchResource(site: string, keyword: string, page = 1): Promise<ResourceSearchResponse> {
+    const response = await this.api.get('/resource-search', {
+      params: {
+        site,
+        keyword,
+        page
+      }
+    });
+    return response.data;
+  }
+
+  async importResource(data: ResourceImportRequest): Promise<ResourceImportResponse> {
+    const response = await this.api.post('/resource-import', data);
+    return response.data;
+  }
+
+  async previewResource(site: string, vodId: number): Promise<ResourcePreviewResponse> {
+    const response = await this.api.get('/resource-preview', {
+      params: {
+        site,
+        vod_id: vodId
+      }
+    });
     return response.data;
   }
 }

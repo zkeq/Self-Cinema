@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from urllib.parse import urlparse
 import hashlib
 import uuid
+import re
+import httpx
 
 from models import get_db, create_tables, init_default_admin, Admin, Series, Episode, ShareLink
 from auth import authenticate_admin, create_access_token, verify_token
@@ -15,6 +17,60 @@ from config import JWT_EXPIRE_MINUTES
 
 # 创建FastAPI应用
 app = FastAPI(title="Self Cinema API", version="1.0.0")
+
+# 资源站点配置
+API_SITES = {
+    "ruyi": {
+        "api": "https://cj.rycjapi.com/api.php/provide/vod",
+        "name": "如意资源",
+    },
+    "bfzy": {
+        "api": "https://bfzyapi.com/api.php/provide/vod",
+        "name": "暴风资源",
+    },
+    "tyyszy": {
+        "api": "https://tyyszy.com/api.php/provide/vod",
+        "name": "天涯资源",
+    },
+    "ffzy": {
+        "api": "http://ffzy5.tv/api.php/provide/vod",
+        "name": "非凡影视",
+        "detail": "http://ffzy5.tv",
+    },
+    "zy360": {
+        "api": "https://360zy.com/api.php/provide/vod",
+        "name": "360资源",
+    },
+    "wolong": {
+        "api": "https://wolongzyw.com/api.php/provide/vod",
+        "name": "卧龙资源",
+    },
+    "jisu": {
+        "api": "https://jszyapi.com/api.php/provide/vod",
+        "name": "极速资源",
+        "detail": "https://jszyapi.com",
+    },
+    "mdzy": {
+        "api": "https://www.mdzyapi.com/api.php/provide/vod",
+        "name": "魔都资源",
+    },
+    "zuid": {
+        "api": "https://api.zuidapi.com/api.php/provide/vod",
+        "name": "最大资源",
+    },
+    "wujin": {
+        "api": "https://api.wujinapi.me/api.php/provide/vod",
+        "name": "无尽资源",
+    },
+    "wwzy": {
+        "api": "https://wwzy.tv/api.php/provide/vod",
+        "name": "旺旺短剧",
+    },
+    "ikun": {
+        "api": "https://ikunzyapi.com/api.php/provide/vod",
+        "name": "iKun资源",
+    },
+}
 
 # 配置CORS
 app.add_middleware(
@@ -105,6 +161,50 @@ class ShareResponse(BaseModel):
     shareUrl: str
     hash: str
     expiresAt: Optional[datetime]
+
+class ResourceSiteResponse(BaseModel):
+    key: str
+    name: str
+    api: str
+    detail: Optional[str] = None
+
+class ResourceSearchItem(BaseModel):
+    vod_id: int
+    vod_name: str
+    vod_sub: Optional[str] = None
+    vod_pic: Optional[str] = None
+    vod_remarks: Optional[str] = None
+    vod_year: Optional[str] = None
+    vod_actor: Optional[str] = None
+    vod_director: Optional[str] = None
+    type_name: Optional[str] = None
+
+class ResourceSearchResponse(BaseModel):
+    site: str
+    page: int
+    pagecount: int
+    total: int
+    list: List[ResourceSearchItem]
+
+class ResourceImportRequest(BaseModel):
+    site: str
+    vod_id: int
+
+class ResourceImportResponse(BaseModel):
+    series: SeriesResponse
+    episodes: List[EpisodeResponse]
+
+class ResourcePreviewEpisode(BaseModel):
+    episode: int
+    title: str
+    url: str
+
+class ResourcePreviewResponse(BaseModel):
+    site: str
+    vod_id: int
+    title: str
+    cover: Optional[str] = None
+    episodes: List[ResourcePreviewEpisode]
 
 class WatchResponse(BaseModel):
     series: SeriesResponse
@@ -246,6 +346,42 @@ def episode_to_response(episode: Episode) -> EpisodeResponse:
         isVip=episode.is_vip,
         created_at=episode.created_at
     )
+
+def strip_html(content: Optional[str]) -> str:
+    if not content:
+        return ""
+    return re.sub(r"<[^>]+>", "", content).strip()
+
+def parse_year(text: Optional[str]) -> Optional[int]:
+    if not text:
+        return None
+    match = re.search(r"(\d{4})", text)
+    return int(match.group(1)) if match else None
+
+def parse_list_field(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [item.strip() for item in re.split(r"[,\s]+", value) if item.strip()]
+
+def parse_play_urls(play_url: Optional[str]) -> List[Dict[str, str]]:
+    if not play_url:
+        return []
+    source_groups = play_url.split("$$$")
+    first_group = source_groups[0]
+    entries = [item for item in first_group.split("#") if item]
+    results = []
+    for index, entry in enumerate(entries, start=1):
+        if "$" in entry:
+            title, url = entry.split("$", 1)
+            title = title.strip() or f"第{index}集"
+        else:
+            title, url = f"第{index}集", entry.strip()
+        results.append({
+            "episode": index,
+            "title": title,
+            "url": url.strip()
+        })
+    return results
 
 # API路由
 
@@ -432,6 +568,147 @@ async def delete_episode(episode_id: str, db: Session = Depends(get_db), admin: 
     db.commit()
     return {"message": "删除成功"}
 
+async def fetch_resource_data(site_key: str, params: Dict[str, str]) -> Dict:
+    site = API_SITES.get(site_key)
+    if not site:
+        raise HTTPException(status_code=400, detail="资源站点不存在")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(site["api"], params=params)
+        response.raise_for_status()
+        return response.json()
+
+@app.get("/resource-sites", response_model=List[ResourceSiteResponse])
+async def get_resource_sites(admin: Admin = Depends(get_current_admin)):
+    """获取资源站点列表"""
+    return [
+        ResourceSiteResponse(key=key, name=value["name"], api=value["api"], detail=value.get("detail"))
+        for key, value in API_SITES.items()
+    ]
+
+@app.get("/resource-search", response_model=ResourceSearchResponse)
+async def search_resource(
+    site: str = Query(..., description="资源站点key"),
+    keyword: str = Query(..., min_length=1, description="搜索关键词"),
+    page: int = Query(1, ge=1),
+    admin: Admin = Depends(get_current_admin)
+):
+    """搜索资源站点"""
+    payload = await fetch_resource_data(site, {"ac": "videolist", "wd": keyword, "page": str(page)})
+    items = [
+        ResourceSearchItem(
+            vod_id=item.get("vod_id"),
+            vod_name=item.get("vod_name", ""),
+            vod_sub=item.get("vod_sub"),
+            vod_pic=item.get("vod_pic"),
+            vod_remarks=item.get("vod_remarks"),
+            vod_year=item.get("vod_year"),
+            vod_actor=item.get("vod_actor"),
+            vod_director=item.get("vod_director"),
+            type_name=item.get("type_name")
+        )
+        for item in payload.get("list", [])
+    ]
+    return ResourceSearchResponse(
+        site=site,
+        page=payload.get("page", page),
+        pagecount=payload.get("pagecount", 1),
+        total=payload.get("total", len(items)),
+        list=items
+    )
+
+@app.get("/resource-preview", response_model=ResourcePreviewResponse)
+async def preview_resource(
+    site: str = Query(..., description="资源站点key"),
+    vod_id: int = Query(..., description="资源ID"),
+    admin: Admin = Depends(get_current_admin)
+):
+    """预览资源站点资源播放信息"""
+    payload = await fetch_resource_data(site, {"ac": "videolist", "ids": str(vod_id)})
+    items = payload.get("list", [])
+    if not items:
+        raise HTTPException(status_code=404, detail="未找到资源详情")
+    data = items[0]
+    episodes_data = parse_play_urls(data.get("vod_play_url"))
+    if not episodes_data:
+        raise HTTPException(status_code=400, detail="资源暂无播放地址")
+    return ResourcePreviewResponse(
+        site=site,
+        vod_id=vod_id,
+        title=data.get("vod_name", ""),
+        cover=data.get("vod_pic"),
+        episodes=[
+            ResourcePreviewEpisode(
+                episode=episode["episode"],
+                title=episode["title"],
+                url=episode["url"]
+            )
+            for episode in episodes_data
+        ]
+    )
+
+@app.post("/resource-import", response_model=ResourceImportResponse)
+async def import_resource(request: ResourceImportRequest, db: Session = Depends(get_db), admin: Admin = Depends(get_current_admin)):
+    """导入资源站点资源"""
+    payload = await fetch_resource_data(request.site, {"ac": "videolist", "ids": str(request.vod_id)})
+    items = payload.get("list", [])
+    if not items:
+        raise HTTPException(status_code=404, detail="未找到资源详情")
+    data = items[0]
+    episodes_data = parse_play_urls(data.get("vod_play_url"))
+    if not episodes_data:
+        raise HTTPException(status_code=400, detail="资源暂无播放地址")
+
+    series_id = str(uuid.uuid4())
+    series = Series(
+        id=series_id,
+        title=data.get("vod_name", ""),
+        english_title=data.get("vod_en"),
+        description=strip_html(data.get("vod_blurb") or data.get("vod_content")),
+        cover_image=data.get("vod_pic"),
+        backdrop_image=data.get("vod_pic_slide") or data.get("vod_pic"),
+        total_episodes=len(episodes_data),
+        release_year=parse_year(data.get("vod_year")),
+        rating=int(float(data.get("vod_douban_score") or data.get("vod_score") or 0) * 10),
+        views=str(data.get("vod_hits") or "0"),
+        status=data.get("vod_remarks") or ("已完结" if data.get("vod_isend") else "更新中"),
+        director=data.get("vod_director"),
+        region=data.get("vod_area"),
+        language=data.get("vod_lang"),
+        update_time=data.get("vod_time")
+    )
+    series.genre_list = parse_list_field(data.get("vod_class") or data.get("vod_tag"))
+    series.actors_list = parse_list_field(data.get("vod_actor"))
+    series.tags_list = parse_list_field(data.get("vod_tag"))
+
+    db.add(series)
+    db.flush()
+
+    created_episodes = []
+    for episode_info in episodes_data:
+        episode = Episode(
+            id=str(uuid.uuid4()),
+            series_id=series_id,
+            episode=episode_info["episode"],
+            title=episode_info["title"],
+            description=None,
+            video_url=episode_info["url"],
+            duration=data.get("vod_duration"),
+            cover_image=data.get("vod_pic"),
+            is_vip=False
+        )
+        db.add(episode)
+        created_episodes.append(episode)
+
+    db.commit()
+    db.refresh(series)
+    for episode in created_episodes:
+        db.refresh(episode)
+
+    return ResourceImportResponse(
+        series=series_to_response(series),
+        episodes=[episode_to_response(episode) for episode in created_episodes]
+    )
+
 # 分享功能API
 @app.post("/series/{series_id}/share", response_model=ShareResponse)
 async def create_share_link(series_id: str, request: Request, db: Session = Depends(get_db), admin: Admin = Depends(get_current_admin)):
@@ -440,19 +717,23 @@ async def create_share_link(series_id: str, request: Request, db: Session = Depe
     if not series:
         raise HTTPException(status_code=404, detail="Series not found")
 
-    # 生成唯一hash
-    hash_source = f"{series_id}{datetime.utcnow().isoformat()}"
-    share_hash = hashlib.md5(hash_source.encode()).hexdigest()[:16]
+    existing_link = db.query(ShareLink).filter(ShareLink.series_id == series_id).order_by(ShareLink.created_at.desc()).first()
+    if existing_link and (existing_link.expires_at is None or existing_link.expires_at > datetime.utcnow()):
+        share_hash = existing_link.hash
+    else:
+        # 生成唯一hash
+        hash_source = f"{series_id}{datetime.utcnow().isoformat()}"
+        share_hash = hashlib.md5(hash_source.encode()).hexdigest()[:16]
 
-    # 创建分享链接记录
-    share_link = ShareLink(
-        hash=share_hash,
-        series_id=series_id,
-        expires_at=None  # 永不过期
-    )
+        # 创建分享链接记录
+        share_link = ShareLink(
+            hash=share_hash,
+            series_id=series_id,
+            expires_at=None  # 永不过期
+        )
 
-    db.add(share_link)
-    db.commit()
+        db.add(share_link)
+        db.commit()
 
     # 动态获取请求来源地址
     # 优先使用 Referer，其次使用 Origin，最后使用 Host
