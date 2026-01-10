@@ -44,8 +44,8 @@ export default function AdminDashboard() {
   const [success, setSuccess] = useState('');
   const [resourceSites, setResourceSites] = useState<ResourceSite[]>([]);
   const [resourceKeyword, setResourceKeyword] = useState('');
-  const [selectedSiteKey, setSelectedSiteKey] = useState('');
-  const [resourceResults, setResourceResults] = useState<ResourceSearchItem[]>([]);
+  const [selectedSiteKeys, setSelectedSiteKeys] = useState<string[]>([]);
+  const [resourceResults, setResourceResults] = useState<{ siteKey: string; items: ResourceSearchItem[] }[]>([]);
   const [resourcePage, setResourcePage] = useState(1);
   const [resourceTotal, setResourceTotal] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
@@ -109,8 +109,8 @@ export default function AdminDashboard() {
       ]);
       setSeries(seriesData);
       setResourceSites(siteData);
-      if (siteData.length && !selectedSiteKey) {
-        setSelectedSiteKey(siteData[0].key);
+      if (siteData.length && selectedSiteKeys.length === 0) {
+        setSelectedSiteKeys([siteData[0].key]);
       }
       
       // 获取每个电视剧的剧集
@@ -197,16 +197,22 @@ export default function AdminDashboard() {
   };
 
   const handleSearchResource = async (page = 1) => {
-    if (!resourceKeyword.trim() || !selectedSiteKey) {
+    if (!resourceKeyword.trim() || selectedSiteKeys.length === 0) {
       showError('请选择资源站点并输入关键词');
       return;
     }
     try {
       setIsSearching(true);
-      const response = await apiClient.searchResource(selectedSiteKey, resourceKeyword.trim(), page);
-      setResourceResults(response.list);
-      setResourcePage(response.page);
-      setResourceTotal(response.total);
+      const responses = await Promise.all(
+        selectedSiteKeys.map((siteKey) => apiClient.searchResource(siteKey, resourceKeyword.trim(), page))
+      );
+      const groupedResults = responses.map((response, index) => ({
+        siteKey: selectedSiteKeys[index],
+        items: response.list
+      }));
+      setResourceResults(groupedResults);
+      setResourcePage(page);
+      setResourceTotal(groupedResults.reduce((total, group) => total + group.items.length, 0));
     } catch (err) {
       showError('资源搜索失败');
     } finally {
@@ -214,10 +220,10 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleImportResource = async (vodId: number) => {
+  const handleImportResource = async (vodId: number, siteKey: string) => {
     try {
       await apiClient.importResource({
-        site: selectedSiteKey,
+        site: siteKey,
         vod_id: vodId
       });
       showSuccess('资源导入成功');
@@ -227,10 +233,10 @@ export default function AdminDashboard() {
     }
   };
 
-  const handlePreviewResource = async (item: ResourceSearchItem) => {
+  const handlePreviewResource = async (item: ResourceSearchItem, siteKey: string) => {
     try {
       setIsPreviewLoading(true);
-      const response = await apiClient.previewResource(selectedSiteKey, item.vod_id);
+      const response = await apiClient.previewResource(siteKey, item.vod_id);
       setPreviewData(response);
       setIsPreviewOpen(true);
     } catch (err) {
@@ -870,14 +876,19 @@ export default function AdminDashboard() {
                     <select
                       id="resourceSite"
                       className="mt-2 w-full px-3 py-2 border rounded-md"
-                      value={selectedSiteKey}
-                      onChange={(e) => setSelectedSiteKey(e.target.value)}
+                      multiple
+                      value={selectedSiteKeys}
+                      onChange={(e) => {
+                        const values = Array.from(e.target.selectedOptions).map((option) => option.value);
+                        setSelectedSiteKeys(values);
+                      }}
                     >
                       {resourceSites.length === 0 && <option value="">暂无资源站点</option>}
                       {resourceSites.map((site) => (
                         <option key={site.key} value={site.key}>{site.name}</option>
                       ))}
                     </select>
+                    <p className="mt-2 text-xs text-muted-foreground">按住 Ctrl/⌘ 可多选资源站点</p>
                   </div>
                   <div className="flex-[2]">
                     <Label htmlFor="resourceKeyword">关键词</Label>
@@ -896,37 +907,51 @@ export default function AdminDashboard() {
                 </div>
                 {resourceResults.length > 0 ? (
                   <div className="space-y-3">
-                    {resourceResults.map((item) => (
-                      <div key={item.vod_id} className="flex flex-col gap-4 p-4 border rounded-lg md:flex-row md:items-center md:justify-between">
-                        <div className="flex items-start gap-4">
-                          {item.vod_pic ? (
-                            <img src={item.vod_pic} alt={item.vod_name} className="h-20 w-14 object-cover rounded" />
-                          ) : (
-                            <div className="h-20 w-14 rounded bg-muted" />
-                          )}
-                          <div>
-                            <h4 className="font-semibold">{item.vod_name}</h4>
-                            {item.vod_sub && <p className="text-sm text-muted-foreground">别名：{item.vod_sub}</p>}
-                            <div className="mt-2 flex flex-wrap gap-2 text-sm text-muted-foreground">
-                              {item.type_name && <span>类型：{item.type_name}</span>}
-                              {item.vod_year && <span>年份：{item.vod_year}</span>}
-                              {item.vod_remarks && <span>备注：{item.vod_remarks}</span>}
+                    {resourceResults.map((group) => (
+                      <div key={group.siteKey} className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-base font-semibold">
+                            {resourceSites.find((site) => site.key === group.siteKey)?.name || group.siteKey}
+                          </h3>
+                          <span className="text-sm text-muted-foreground">共 {group.items.length} 条</span>
+                        </div>
+                        {group.items.length > 0 ? (
+                          group.items.map((item) => (
+                            <div key={`${group.siteKey}-${item.vod_id}`} className="flex flex-col gap-4 p-4 border rounded-lg md:flex-row md:items-center md:justify-between">
+                              <div className="flex items-start gap-4">
+                                {item.vod_pic ? (
+                                  <img src={item.vod_pic} alt={item.vod_name} className="h-20 w-14 object-cover rounded" />
+                                ) : (
+                                  <div className="h-20 w-14 rounded bg-muted" />
+                                )}
+                                <div>
+                                  <h4 className="font-semibold">{item.vod_name}</h4>
+                                  {item.vod_sub && <p className="text-sm text-muted-foreground">别名：{item.vod_sub}</p>}
+                                  <div className="mt-2 flex flex-wrap gap-2 text-sm text-muted-foreground">
+                                    {item.type_name && <span>类型：{item.type_name}</span>}
+                                    {item.vod_year && <span>年份：{item.vod_year}</span>}
+                                    {item.vod_remarks && <span>备注：{item.vod_remarks}</span>}
+                                  </div>
+                                  {item.vod_actor && (
+                                    <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
+                                      主演：{item.vod_actor}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => handlePreviewResource(item, group.siteKey)} disabled={isPreviewLoading}>
+                                  预览
+                                </Button>
+                                <Button onClick={() => handleImportResource(item.vod_id, group.siteKey)}>
+                                  导入
+                                </Button>
+                              </div>
                             </div>
-                            {item.vod_actor && (
-                              <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
-                                主演：{item.vod_actor}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="outline" onClick={() => handlePreviewResource(item)} disabled={isPreviewLoading}>
-                            预览
-                          </Button>
-                          <Button onClick={() => handleImportResource(item.vod_id)}>
-                            导入
-                          </Button>
-                        </div>
+                          ))
+                        ) : (
+                          <div className="text-sm text-muted-foreground">暂无结果</div>
+                        )}
                       </div>
                     ))}
                     <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -1002,7 +1027,7 @@ export default function AdminDashboard() {
                       <Button
                         onClick={() => {
                           if (previewData) {
-                            handleImportResource(previewData.vod_id);
+                            handleImportResource(previewData.vod_id, previewData.site);
                             setIsPreviewOpen(false);
                           }
                         }}
