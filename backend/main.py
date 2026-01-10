@@ -383,6 +383,30 @@ def parse_play_urls(play_url: Optional[str]) -> List[Dict[str, str]]:
         })
     return results
 
+def is_direct_media_url(url: str) -> bool:
+    lowered = url.lower().split("?", 1)[0]
+    return lowered.endswith((".m3u8", ".mp4", ".flv", ".mkv", ".webm", ".mov", ".avi"))
+
+async def resolve_playback_url(client: httpx.AsyncClient, url: str) -> str:
+    if not url:
+        return url
+    if url.startswith("html:"):
+        return url
+    if is_direct_media_url(url):
+        return url
+    normalized = url
+    if url.startswith("//"):
+        normalized = f"https:{url}"
+    try:
+        response = await client.get(normalized)
+        content_type = response.headers.get("content-type", "").lower()
+        body_preview = response.text[:200].lower()
+        if "text/html" in content_type or "<html" in body_preview or "<!doctype html" in body_preview:
+            return f"html:{normalized}"
+    except httpx.HTTPError:
+        return url
+    return url
+
 # API路由
 
 # 启动事件
@@ -684,20 +708,22 @@ async def import_resource(request: ResourceImportRequest, db: Session = Depends(
     db.flush()
 
     created_episodes = []
-    for episode_info in episodes_data:
-        episode = Episode(
-            id=str(uuid.uuid4()),
-            series_id=series_id,
-            episode=episode_info["episode"],
-            title=episode_info["title"],
-            description=None,
-            video_url=episode_info["url"],
-            duration=data.get("vod_duration"),
-            cover_image=data.get("vod_pic"),
-            is_vip=False
-        )
-        db.add(episode)
-        created_episodes.append(episode)
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        for episode_info in episodes_data:
+            playback_url = await resolve_playback_url(client, episode_info["url"])
+            episode = Episode(
+                id=str(uuid.uuid4()),
+                series_id=series_id,
+                episode=episode_info["episode"],
+                title=episode_info["title"],
+                description=None,
+                video_url=playback_url,
+                duration=data.get("vod_duration"),
+                cover_image=data.get("vod_pic"),
+                is_vip=False
+            )
+            db.add(episode)
+            created_episodes.append(episode)
 
     db.commit()
     db.refresh(series)
