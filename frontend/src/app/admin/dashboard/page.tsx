@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,25 +12,26 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { apiClient, SeriesAPI, EpisodeAPI, CreateSeriesRequest, CreateEpisodeRequest } from '@/lib/api';
+import { apiClient, SeriesAPI, EpisodeAPI, CreateSeriesRequest, CreateEpisodeRequest, ResourceSite, ResourceSearchItem, ResourcePreviewResponse } from '@/lib/api';
 import { getToken, removeToken } from '@/lib/auth';
-import { 
-  Plus, 
-  Edit, 
-  Trash2, 
-  Share2, 
-  Play, 
-  Settings, 
-  LogOut, 
-  Film, 
-  Users, 
+import {
+  Plus,
+  Edit,
+  Trash2,
+  Share2,
+  Play,
+  Settings,
+  LogOut,
+  Film,
+  Users,
   Clock,
   Star,
   Calendar,
   Tv,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Search
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -41,6 +42,18 @@ export default function AdminDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [resourceSites, setResourceSites] = useState<ResourceSite[]>([]);
+  const [resourceKeyword, setResourceKeyword] = useState('');
+  const [selectedSiteKeys, setSelectedSiteKeys] = useState<string[]>([]);
+  const [resourceResults, setResourceResults] = useState<{ siteKey: string; items: ResourceSearchItem[] }[]>([]);
+  const [resourcePage, setResourcePage] = useState(1);
+  const [resourceTotal, setResourceTotal] = useState(0);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState<ResourcePreviewResponse | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isSiteDropdownOpen, setIsSiteDropdownOpen] = useState(false);
+  const siteDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // 对话框状态
   const [isSeriesDialogOpen, setIsSeriesDialogOpen] = useState(false);
@@ -89,11 +102,29 @@ export default function AdminDashboard() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!isSiteDropdownOpen) return;
+      if (siteDropdownRef.current && !siteDropdownRef.current.contains(event.target as Node)) {
+        setIsSiteDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isSiteDropdownOpen]);
+
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const seriesData = await apiClient.getSeries();
+      const [seriesData, siteData] = await Promise.all([
+        apiClient.getSeries(),
+        apiClient.getResourceSites()
+      ]);
       setSeries(seriesData);
+      setResourceSites(siteData);
+      if (siteData.length && selectedSiteKeys.length === 0) {
+        setSelectedSiteKeys([siteData[0].key]);
+      }
       
       // 获取每个电视剧的剧集
       const episodesData: {[key: string]: EpisodeAPI[]} = {};
@@ -175,6 +206,72 @@ export default function AdminDashboard() {
       showSuccess('分享链接已复制到剪贴板');
     } catch (err) {
       showError('生成分享链接失败');
+    }
+  };
+
+  const handleSearchResource = async (page = 1) => {
+    if (!resourceKeyword.trim() || selectedSiteKeys.length === 0) {
+      showError('请选择资源站点并输入关键词');
+      return;
+    }
+    try {
+      setIsSearching(true);
+      const responses = await Promise.all(
+        selectedSiteKeys.map((siteKey) => apiClient.searchResource(siteKey, resourceKeyword.trim(), page))
+      );
+      const groupedResults = responses.map((response, index) => ({
+        siteKey: selectedSiteKeys[index],
+        items: response.list
+      }));
+      setResourceResults(groupedResults);
+      setResourcePage(page);
+      setResourceTotal(groupedResults.reduce((total, group) => total + group.items.length, 0));
+    } catch (err) {
+      showError('资源搜索失败');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const toggleSiteKey = (siteKey: string) => {
+    setSelectedSiteKeys((prev) => (
+      prev.includes(siteKey)
+        ? prev.filter((key) => key !== siteKey)
+        : [...prev, siteKey]
+    ));
+  };
+
+  const handleSelectAllSites = () => {
+    setSelectedSiteKeys(resourceSites.map((site) => site.key));
+  };
+
+  const handleClearSites = () => {
+    setSelectedSiteKeys([]);
+  };
+
+  const handleImportResource = async (vodId: number, siteKey: string) => {
+    try {
+      await apiClient.importResource({
+        site: siteKey,
+        vod_id: vodId
+      });
+      showSuccess('资源导入成功');
+      fetchData();
+    } catch (err) {
+      showError('资源导入失败');
+    }
+  };
+
+  const handlePreviewResource = async (item: ResourceSearchItem, siteKey: string) => {
+    try {
+      setIsPreviewLoading(true);
+      const response = await apiClient.previewResource(siteKey, item.vod_id);
+      setPreviewData(response);
+      setIsPreviewOpen(true);
+    } catch (err) {
+      showError('资源预览失败');
+    } finally {
+      setIsPreviewLoading(false);
     }
   };
 
@@ -392,9 +489,10 @@ export default function AdminDashboard() {
 
         {/* 主要内容 */}
         <Tabs defaultValue="series" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="series">电视剧管理</TabsTrigger>
             <TabsTrigger value="episodes">剧集管理</TabsTrigger>
+            <TabsTrigger value="resources">资源导入</TabsTrigger>
           </TabsList>
 
           {/* 电视剧管理 */}
@@ -791,6 +889,235 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          {/* 资源导入 */}
+          <TabsContent value="resources" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>资源导入</CardTitle>
+                <CardDescription>从资源站点搜索并导入影视资源</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-col gap-4 md:flex-row md:items-end">
+                  <div className="flex-1">
+                    <Label htmlFor="resourceSite">资源站点</Label>
+                    <div className="mt-2 space-y-2" ref={siteDropdownRef}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-between"
+                        onClick={() => setIsSiteDropdownOpen((prev) => !prev)}
+                      >
+                        {selectedSiteKeys.length > 0 ? `已选 ${selectedSiteKeys.length} 个站点` : '选择资源站点'}
+                        <span className="text-muted-foreground">⌄</span>
+                      </Button>
+                      {selectedSiteKeys.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedSiteKeys.map((key) => {
+                            const site = resourceSites.find((item) => item.key === key);
+                            return (
+                              <Badge key={key} variant="secondary" className="flex items-center gap-1">
+                                {site?.name || key}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {isSiteDropdownOpen && (
+                        <div className="relative">
+                          <div className="absolute z-20 w-full rounded-md border bg-background shadow-lg">
+                            <div className="max-h-60 overflow-y-auto p-2 space-y-1">
+                              {resourceSites.length === 0 && (
+                                <div className="px-2 py-3 text-sm text-muted-foreground">暂无资源站点</div>
+                              )}
+                              {resourceSites.map((site) => (
+                                <label
+                                  key={site.key}
+                                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedSiteKeys.includes(site.key)}
+                                    onChange={() => toggleSiteKey(site.key)}
+                                    className="h-4 w-4"
+                                  />
+                                  <span>{site.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                              <button
+                                type="button"
+                                className="hover:text-foreground"
+                                onClick={handleSelectAllSites}
+                              >
+                                全选
+                              </button>
+                              <button
+                                type="button"
+                                className="hover:text-foreground"
+                                onClick={handleClearSites}
+                              >
+                                清空
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex-[2]">
+                    <Label htmlFor="resourceKeyword">关键词</Label>
+                    <Input
+                      id="resourceKeyword"
+                      className="mt-2"
+                      value={resourceKeyword}
+                      onChange={(e) => setResourceKeyword(e.target.value)}
+                      placeholder="输入影视名称"
+                    />
+                  </div>
+                  <Button onClick={() => handleSearchResource(1)} disabled={isSearching}>
+                    <Search className="h-4 w-4 mr-2" />
+                    {isSearching ? '搜索中...' : '搜索'}
+                  </Button>
+                </div>
+                {resourceResults.length > 0 ? (
+                  <div className="space-y-3">
+                    {resourceResults.map((group) => (
+                      <div key={group.siteKey} className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-base font-semibold">
+                            {resourceSites.find((site) => site.key === group.siteKey)?.name || group.siteKey}
+                          </h3>
+                          <span className="text-sm text-muted-foreground">共 {group.items.length} 条</span>
+                        </div>
+                        {group.items.length > 0 ? (
+                          group.items.map((item) => (
+                            <div key={`${group.siteKey}-${item.vod_id}`} className="flex flex-col gap-4 p-4 border rounded-lg md:flex-row md:items-center md:justify-between">
+                              <div className="flex items-start gap-4">
+                                {item.vod_pic ? (
+                                  <img src={item.vod_pic} alt={item.vod_name} className="h-20 w-14 object-cover rounded" />
+                                ) : (
+                                  <div className="h-20 w-14 rounded bg-muted" />
+                                )}
+                                <div>
+                                  <h4 className="font-semibold">{item.vod_name}</h4>
+                                  {item.vod_sub && <p className="text-sm text-muted-foreground">别名：{item.vod_sub}</p>}
+                                  <div className="mt-2 flex flex-wrap gap-2 text-sm text-muted-foreground">
+                                    {item.type_name && <span>类型：{item.type_name}</span>}
+                                    {item.vod_year && <span>年份：{item.vod_year}</span>}
+                                    {item.vod_remarks && <span>备注：{item.vod_remarks}</span>}
+                                  </div>
+                                  {item.vod_actor && (
+                                    <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
+                                      主演：{item.vod_actor}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => handlePreviewResource(item, group.siteKey)} disabled={isPreviewLoading}>
+                                  预览
+                                </Button>
+                                <Button onClick={() => handleImportResource(item.vod_id, group.siteKey)}>
+                                  导入
+                                </Button>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-sm text-muted-foreground">暂无结果</div>
+                        )}
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between text-sm text-muted-foreground">
+                      <span>共 {resourceTotal} 条结果</span>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleSearchResource(resourcePage - 1)}
+                          disabled={resourcePage <= 1 || isSearching}
+                        >
+                          上一页
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleSearchResource(resourcePage + 1)}
+                          disabled={resourceResults.length === 0 || isSearching}
+                        >
+                          下一页
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">暂无搜索结果</div>
+                )}
+              </CardContent>
+            </Card>
+            <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+              <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>资源预览</DialogTitle>
+                  <DialogDescription>
+                    先打开播放地址确认可播放后再导入
+                  </DialogDescription>
+                </DialogHeader>
+                {previewData ? (
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-4">
+                      {previewData.cover ? (
+                        <img src={previewData.cover} alt={previewData.title} className="h-28 w-20 rounded object-cover" />
+                      ) : (
+                        <div className="h-28 w-20 rounded bg-muted" />
+                      )}
+                      <div>
+                        <h3 className="text-lg font-semibold">{previewData.title}</h3>
+                        <p className="text-sm text-muted-foreground">共 {previewData.episodes.length} 集</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {previewData.episodes.map((episode) => (
+                        <div key={episode.episode} className="flex flex-col gap-2 rounded border p-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">第 {episode.episode} 集</Badge>
+                              <span className="font-medium">{episode.title}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground break-all">{episode.url}</p>
+                          </div>
+                          <Button asChild size="sm" variant="outline">
+                            <a href={episode.url} target="_blank" rel="noreferrer">
+                              预览播放
+                            </a>
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" onClick={() => setIsPreviewOpen(false)}>
+                        取消
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          if (previewData) {
+                            handleImportResource(previewData.vod_id, previewData.site);
+                            setIsPreviewOpen(false);
+                          }
+                        }}
+                      >
+                        确认导入
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">暂无预览数据</div>
+                )}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
         </Tabs>
       </div>
