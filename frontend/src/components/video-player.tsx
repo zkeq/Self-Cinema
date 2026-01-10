@@ -19,8 +19,8 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const isHtmlSource = src.startsWith('html:');
-  const resolvedSrc = isHtmlSource ? src.replace(/^html:/, '') : src;
+  const isHtmlSource = src.startsWith('html:') || /\/share\//i.test(src) || src.toLowerCase().endsWith('.html');
+  const resolvedSrc = src.startsWith('html:') ? src.replace(/^html:/, '') : src;
 
   useEffect(() => {
     if (!videoRef.current || typeof window === 'undefined') return;
