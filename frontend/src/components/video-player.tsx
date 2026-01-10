@@ -362,7 +362,7 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
         if (videoRef.current) {
           console.log('降级到原生播放器');
           try {
-            videoRef.current.src = src;
+            videoRef.current.src = resolvedSrc;
             videoRef.current.controls = true;
           } catch (fallbackError) {
             console.error('原生播放器降级也失败:', fallbackError);

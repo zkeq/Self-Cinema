@@ -399,12 +399,14 @@ async def resolve_playback_url(client: httpx.AsyncClient, url: str) -> str:
         normalized = f"https:{url}"
     try:
         response = await client.get(normalized)
+        if response.is_error:
+            return f"html:{normalized}"
         content_type = response.headers.get("content-type", "").lower()
         body_preview = response.text[:200].lower()
         if "text/html" in content_type or "<html" in body_preview or "<!doctype html" in body_preview:
             return f"html:{normalized}"
     except httpx.HTTPError:
-        return url
+        return f"html:{normalized}"
     return url
 
 # API路由
