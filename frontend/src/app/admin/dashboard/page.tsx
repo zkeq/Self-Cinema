@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -52,6 +52,8 @@ export default function AdminDashboard() {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewData, setPreviewData] = useState<ResourcePreviewResponse | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isSiteDropdownOpen, setIsSiteDropdownOpen] = useState(false);
+  const siteDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // 对话框状态
   const [isSeriesDialogOpen, setIsSeriesDialogOpen] = useState(false);
@@ -99,6 +101,17 @@ export default function AdminDashboard() {
     }
     fetchData();
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!isSiteDropdownOpen) return;
+      if (siteDropdownRef.current && !siteDropdownRef.current.contains(event.target as Node)) {
+        setIsSiteDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isSiteDropdownOpen]);
 
   const fetchData = async () => {
     try {
@@ -218,6 +231,22 @@ export default function AdminDashboard() {
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const toggleSiteKey = (siteKey: string) => {
+    setSelectedSiteKeys((prev) => (
+      prev.includes(siteKey)
+        ? prev.filter((key) => key !== siteKey)
+        : [...prev, siteKey]
+    ));
+  };
+
+  const handleSelectAllSites = () => {
+    setSelectedSiteKeys(resourceSites.map((site) => site.key));
+  };
+
+  const handleClearSites = () => {
+    setSelectedSiteKeys([]);
   };
 
   const handleImportResource = async (vodId: number, siteKey: string) => {
@@ -873,22 +902,70 @@ export default function AdminDashboard() {
                 <div className="flex flex-col gap-4 md:flex-row md:items-end">
                   <div className="flex-1">
                     <Label htmlFor="resourceSite">资源站点</Label>
-                    <select
-                      id="resourceSite"
-                      className="mt-2 w-full px-3 py-2 border rounded-md"
-                      multiple
-                      value={selectedSiteKeys}
-                      onChange={(e) => {
-                        const values = Array.from(e.target.selectedOptions).map((option) => option.value);
-                        setSelectedSiteKeys(values);
-                      }}
-                    >
-                      {resourceSites.length === 0 && <option value="">暂无资源站点</option>}
-                      {resourceSites.map((site) => (
-                        <option key={site.key} value={site.key}>{site.name}</option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-muted-foreground">按住 Ctrl/⌘ 可多选资源站点</p>
+                    <div className="mt-2 space-y-2" ref={siteDropdownRef}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-between"
+                        onClick={() => setIsSiteDropdownOpen((prev) => !prev)}
+                      >
+                        {selectedSiteKeys.length > 0 ? `已选 ${selectedSiteKeys.length} 个站点` : '选择资源站点'}
+                        <span className="text-muted-foreground">⌄</span>
+                      </Button>
+                      {selectedSiteKeys.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedSiteKeys.map((key) => {
+                            const site = resourceSites.find((item) => item.key === key);
+                            return (
+                              <Badge key={key} variant="secondary" className="flex items-center gap-1">
+                                {site?.name || key}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {isSiteDropdownOpen && (
+                        <div className="relative">
+                          <div className="absolute z-20 w-full rounded-md border bg-background shadow-lg">
+                            <div className="max-h-60 overflow-y-auto p-2 space-y-1">
+                              {resourceSites.length === 0 && (
+                                <div className="px-2 py-3 text-sm text-muted-foreground">暂无资源站点</div>
+                              )}
+                              {resourceSites.map((site) => (
+                                <label
+                                  key={site.key}
+                                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedSiteKeys.includes(site.key)}
+                                    onChange={() => toggleSiteKey(site.key)}
+                                    className="h-4 w-4"
+                                  />
+                                  <span>{site.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                              <button
+                                type="button"
+                                className="hover:text-foreground"
+                                onClick={handleSelectAllSites}
+                              >
+                                全选
+                              </button>
+                              <button
+                                type="button"
+                                className="hover:text-foreground"
+                                onClick={handleClearSites}
+                              >
+                                清空
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="flex-[2]">
                     <Label htmlFor="resourceKeyword">关键词</Label>
