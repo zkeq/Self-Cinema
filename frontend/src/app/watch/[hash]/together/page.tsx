@@ -319,10 +319,36 @@ export default function TogetherPage() {
   );
 
   const copyShareLink = async () => {
+    const fallbackCopy = () => {
+      const textarea = document.createElement("textarea");
+      textarea.value = shareLink;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-1000px";
+      textarea.style.left = "-1000px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const success = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return success;
+    };
+
     try {
-      await navigator.clipboard.writeText(shareLink);
-      addSystemMessage("分享链接已复制");
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(shareLink);
+        addSystemMessage("分享链接已复制");
+        return;
+      }
+      if (fallbackCopy()) {
+        addSystemMessage("分享链接已复制");
+        return;
+      }
+      addSystemMessage("复制失败，请手动复制链接");
     } catch {
+      if (fallbackCopy()) {
+        addSystemMessage("分享链接已复制");
+        return;
+      }
       addSystemMessage("复制失败，请手动复制链接");
     }
   };
