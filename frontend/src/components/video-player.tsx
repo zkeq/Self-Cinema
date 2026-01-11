@@ -19,9 +19,17 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const isHtmlSource = src.startsWith('html:') || /\/share\//i.test(src) || src.toLowerCase().endsWith('.html');
+  const resolvedSrc = src.startsWith('html:') ? src.replace(/^html:/, '') : src;
 
   useEffect(() => {
     if (!videoRef.current || typeof window === 'undefined') return;
+    if (isHtmlSource) {
+      setError(null);
+      setErrorDetails(null);
+      setIsLoading(false);
+      return;
+    }
     if (!src) {
       setError('没有提供视频源');
       setErrorDetails('视频源URL为空或未定义');
@@ -29,14 +37,14 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
       return;
     }
 
-    console.log('VideoPlayer useEffect triggered - src:', src);
+    console.log('VideoPlayer useEffect triggered - src:', resolvedSrc);
     setError(null);
     setErrorDetails(null);
     setIsLoading(true);
 
     const initializePlayer = async () => {
       try {
-        console.log('开始初始化播放器，视频源:', src);
+        console.log('开始初始化播放器，视频源:', resolvedSrc);
 
         const video = videoRef.current!;
 
@@ -75,7 +83,7 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
         console.log('Plyr 导入成功');
 
         // 检查是否是 HLS 流
-        const isHLS = src.includes('.m3u8');
+        const isHLS = resolvedSrc.includes('.m3u8');
         console.log('是否为HLS:', isHLS);
 
         if (isHLS) {
@@ -90,7 +98,7 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
                 backBufferLength: 90,
               });
 
-              hls.loadSource(src);
+              hls.loadSource(resolvedSrc);
               hls.attachMedia(video);
 
               hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -136,15 +144,15 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
               hlsRef.current = hls;
             } else {
               console.log('浏览器不支持 HLS，使用直接源');
-              video.src = src;
+              video.src = resolvedSrc;
             }
           } catch {
             console.warn('HLS.js not available, using direct video source');
-            video.src = src;
+            video.src = resolvedSrc;
           }
         } else {
-          console.log('设置直接视频源:', src);
-          video.src = src;
+          console.log('设置直接视频源:', resolvedSrc);
+          video.src = resolvedSrc;
         }
 
         console.log('开始初始化 Plyr');
@@ -354,7 +362,7 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
         if (videoRef.current) {
           console.log('降级到原生播放器');
           try {
-            videoRef.current.src = src;
+            videoRef.current.src = resolvedSrc;
             videoRef.current.controls = true;
           } catch (fallbackError) {
             console.error('原生播放器降级也失败:', fallbackError);
@@ -401,7 +409,20 @@ function VideoPlayerCore({ src, poster, autoplay = false, episodeId }: VideoPlay
         }
       }
     };
-  }, [src, autoplay, episodeId]);
+  }, [src, autoplay, episodeId, isHtmlSource, resolvedSrc]);
+
+  if (isHtmlSource) {
+    return (
+      <div className="relative w-full h-full bg-black rounded-lg overflow-hidden">
+        <iframe
+          src={resolvedSrc}
+          title="Html Player"
+          className="w-full h-full"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
 
   if (error) {
     return (
