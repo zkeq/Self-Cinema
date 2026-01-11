@@ -216,16 +216,24 @@ export default function AdminDashboard() {
     }
     try {
       setIsSearching(true);
-      const responses = await Promise.all(
-        selectedSiteKeys.map((siteKey) => apiClient.searchResource(siteKey, resourceKeyword.trim(), page))
-      );
-      const groupedResults = responses.map((response, index) => ({
-        siteKey: selectedSiteKeys[index],
-        items: response.list
-      }));
-      setResourceResults(groupedResults);
       setResourcePage(page);
-      setResourceTotal(groupedResults.reduce((total, group) => total + group.items.length, 0));
+      setResourceTotal(0);
+      setResourceResults(selectedSiteKeys.map((siteKey) => ({ siteKey, items: [] })));
+      for (const siteKey of selectedSiteKeys) {
+        try {
+          const response = await apiClient.searchResource(siteKey, resourceKeyword.trim(), page);
+          setResourceResults((prev) => {
+            const next = prev.map((group) => (
+              group.siteKey === siteKey ? { ...group, items: response.list } : group
+            ));
+            setResourceTotal(next.reduce((total, group) => total + group.items.length, 0));
+            return next;
+          });
+        } catch (err) {
+          const siteName = resourceSites.find((site) => site.key === siteKey)?.name || siteKey;
+          showError(`${siteName} 搜索失败`);
+        }
+      }
     } catch (err) {
       showError('资源搜索失败');
     } finally {
