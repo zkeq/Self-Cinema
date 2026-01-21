@@ -6,6 +6,12 @@
 
 ![image-20250730201249281](https://img.onmicrosoft.cn/zkeq/20250730201249405.png)
 
+<img width="1582" height="985" alt="image" src="https://github.com/user-attachments/assets/06d59a71-3745-477c-b624-f14feb68f5c2" />
+
+<img width="1582" height="985" alt="image" src="https://github.com/user-attachments/assets/90db6e33-3bc7-4e8d-ac5f-391df83013d7" />
+
+<img width="1582" height="985" alt="image" src="https://github.com/user-attachments/assets/a7988438-1580-4bd6-8323-feb770a72ce7" />
+
 <div align="center">
 
 ![Self Cinema Logo](https://img.shields.io/badge/Self%20Cinema-🎭-red?style=for-the-badge)
